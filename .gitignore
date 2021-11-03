@@ -35,4 +35,5 @@ include/*
 lib/*
 share/*
 /.vscode
-
+/build
+.DS_Store
