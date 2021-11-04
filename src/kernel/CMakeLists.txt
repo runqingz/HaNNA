@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
-project(kernels)
+project(kernel)
 
+set(HEADER_FILES
+    kernel.hpp)
+set(SOURCE_FILES
+    kernel.cpp)
 #enable_testing()
 
 
@@ -11,3 +15,8 @@ set(CMAKE_CXX_EXTENSIONS NO)
 
 # Find Halide
 find_package(Halide REQUIRED)
+
+add_library(kernel
+            ${SOURCE_FILES}
+            ${HEADER_FILES})
+target_link_libraries(kernel PRIVATE Halide::Halide)
