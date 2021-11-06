@@ -98,11 +98,12 @@ int main(int argc, char **argv) {
         printf("Usage: iterations weight_dir seed output_file");
         return -1;
     }
+    printf("start....\n");
     int iterations = atoi(argv[1]);
     std::string weight_dir = argv[2];
     int seed = atoi(argv[3]);
     std::string output_file = argv[4];
-
+    printf("initialize buffer....\n");
     Buffer<float> input(3, 224, 224);
     Buffer<float> output(1000);
 
@@ -138,6 +139,7 @@ int main(int argc, char **argv) {
     Buffer<float> br1_sig[4];
 
     /** load parameters for first section **/
+    printf("load params for first sections....\n");
     std::string conv1_w_shapefile = weight_dir + "conv1_weight_shape.data";
     std::string conv1_w_datafile = weight_dir + "conv1_weight.data";
     conv1_weights = load_conv_params(conv1_w_shapefile, conv1_w_datafile);
@@ -166,6 +168,7 @@ int main(int argc, char **argv) {
     std::string br1_names[4] = {"layer1_0_downsample", "layer2_0_downsample", "layer3_0_downsample", "layer4_0_downsample"};
 
     // load branch 1 data
+    printf("load branch 1 data....\n");
     for (int i = 0; i < 4; i++) {
         std::string conv_shapefile = weight_dir + br1_names[i] + "_0_weight_shape.data";
         std::string conv_datafile = weight_dir + br1_names[i] + "_0_weight.data";
@@ -179,6 +182,7 @@ int main(int argc, char **argv) {
         std::string gamma_shapefile = weight_dir + br1_names[i] + "_1_weight_shape.data";
         std::string gamma_datafile = weight_dir + br1_names[i] + "_1_weight.data";
 
+        
         std::string beta_shapefile = weight_dir + br1_names[i] + "_1_bias_shape.data";
         std::string beta_datafile = weight_dir + br1_names[i] + "_1_bias.data";
 
@@ -190,6 +194,7 @@ int main(int argc, char **argv) {
     }
 
     // load branch 2 data
+    printf("load branch 2 data....\n");
     for (int i = 0; i < 16; i++) {
         for (int j = 1; j <= 3; j++) {
             std::string section = std::to_string(j);
@@ -231,6 +236,7 @@ int main(int argc, char **argv) {
         }
     }
     // load fc weights
+    printf("load fc weights....\n");
     std::string weight_shapefile = weight_dir + "fc_weight_shape.data";
     std::string weight_datafile = weight_dir + "fc_weight.data";
     std::string bias_shapefile = weight_dir + "fc_bias_shape.data";
@@ -274,6 +280,7 @@ int main(int argc, char **argv) {
                  fc1000_weights,
                  fc1000_bias,
                  output);
+                 output.device_sync();
     });
     printf("*************************** Please note ******************************\n"
            "This code hasn't been scheduled properly yet so this runtime \n"

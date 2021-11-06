@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(resnet_50)
+project(resnet50)
 
 #enable_testing()
 
@@ -13,27 +13,28 @@ set(CMAKE_CXX_EXTENSIONS NO)
 find_package(Halide REQUIRED)
 
 # Generator
-add_executable(resnet_50.generator resnet_50_generator.cpp)
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fno-rtti")
+add_executable(resnet50.generator resnet_50_generator.cpp)
 include_directories(${kernel_SOURCE_DIR})
-target_link_libraries(resnet_50.generator
+target_link_libraries(resnet50.generator
                       PRIVATE
-                      kernel
                       Halide::Generator)
 
 # Filters
-add_halide_library(resnet_50 FROM resnet_50.generator
-		   GENERATOR resnet_50)
+add_halide_library(resnet50 FROM resnet50.generator
+		   GENERATOR resnet50
+           FEATURES metal)
 
 # Main executable
 add_executable(resnet_50_process process.cpp)
 target_link_libraries(resnet_50_process
                       PRIVATE
                       Halide::ImageIO
-                      resnet_50)
+                      resnet50)
 
 # Test that the app actually works!
 add_test(NAME resnet_50_process COMMAND resnet_50_process)
 set_tests_properties(resnet_50_process PROPERTIES
-                     LABELS resnet_50
+                     LABELS resnet50
                      PASS_REGULAR_EXPRESSION "Success!"
                      SKIP_REGULAR_EXPRESSION "\\[SKIP\\]")
