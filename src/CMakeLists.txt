@@ -8,5 +8,5 @@ set(CMAKE_CXX_STANDARD_REQUIRED YES)
 set(CMAKE_CXX_EXTENSIONS NO)
 
 
-#add_subdirectory(kernel)
+add_subdirectory(kernel)
 add_subdirectory(resnet_50)
