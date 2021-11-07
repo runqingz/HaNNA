@@ -8,3 +8,4 @@ set(CMAKE_CXX_STANDARD_REQUIRED YES)
 set(CMAKE_CXX_EXTENSIONS NO)
 
 add_subdirectory(conv2d)
+add_subdirectory(depth_separable_conv2d)
