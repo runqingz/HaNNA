@@ -1,10 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
 project(depth_separable_conv2d)
-
-set(HEADER_FILES
-    kernel.hpp)
-set(SOURCE_FILES
-    kernel.cpp)
 #enable_testing()
 
 
