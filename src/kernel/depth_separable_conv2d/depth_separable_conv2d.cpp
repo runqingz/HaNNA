@@ -150,7 +150,7 @@ int main(int argc, char **argv) {
     Buffer<float> depthwise_filters(kernel_size, kernel_size, channels_in, channels_multipliers);
     for (int x = 0; x < kernel_size; x++) {
         for (int y = 0; y < kernel_size; y++) {
-            for (int ci = 0; ci < channels_out; ci++) {
+            for (int ci = 0; ci < channels_in; ci++) {
                 for (int cm = 0; cm < channels_multipliers; cm++) {
                     depthwise_filters(x, y, ci, cm) = rand();
                 }         
