@@ -19,7 +19,8 @@ using namespace Halide::Tools;
 
 Target find_gpu_target();
 
-// Conv2DLayerGPU follows the tf.nn.conv2d implementation of conv2d layer.
+// DepthSeparableConv2DLayerGPU follows the tf.nn.tf.nn.depthwise_conv2d implementation of 
+// depth separable conv2d layer.
 // Note that in this implementation no bias or activation function is applied.
 // Data must follows NHWC format.
 class DepthSeparableConv2DLayerGPU {
@@ -32,7 +33,7 @@ public:
     RDom r;
     // Constructor parameters:
     //  input: 4-D tensor of shape [batch_size, in_height, in_width, in_channels].
-    //  depthwise_filters: 4-D tensor of shape [filter_height, filter_width, in_channels, channel_multiplier]. (TODO: change to TF format)
+    //  depthwise_filters: 4-D tensor of shape [filter_height, filter_width, in_channels, channel_multiplier].
     //  stride: int for the stride of the sliding window.
     DepthSeparableConv2DLayerGPU(Buffer<float> input, Buffer<float> depthwise_filters, const int stride)
         : input(input), depthwise_filters(depthwise_filters), stride(stride) {
@@ -86,7 +87,7 @@ public:
     }
 
     void test_performance(int num_runs=100) {
-        // Test the performance of the scheduled Conv2DLayerGPU.
+        // Test the performance of the scheduled DepthSeparableConv2DLayerGPU.
         Buffer<float> output(input.dim(0).extent(), input.dim(1).extent(), input.dim(2).extent(), depthwise_filters.dim(2).extent() * depthwise_filters.dim(3).extent());
 
         // Run the filter once to initialize any GPU runtime state.
@@ -121,12 +122,12 @@ int main(int argc, char **argv) {
     // Params:
     //   batch_size: number of images (in a single batch).
     //   channels_in: number of input channels (depth of the input).
-    //   channels_out: number of ouput channels (the number of filters).
+    //   channels_multipliers: number of filters applied to each input channel (output is channels_in * channel_multiplier channels).
     //   height: height of the image.
     //   width: width of the image.
     //   kernel_size: width and height of the filters. (3 for 3 x 3 conv layer).
     //   stride: the stride for sliding window.
-    const int batch_size = 8, width = 120, height = 100, channels_in = 3, channels_out = 3, kernel_size = 5, stride = 1, channels_multipliers = 10;
+    const int batch_size = 8, width = 120, height = 100, channels_in = 3, channels_multipliers = 10, kernel_size = 5, stride = 1;
 
     // Generate random input.
     // Input shape follows TensorFlow convention (N, H, W, C)
