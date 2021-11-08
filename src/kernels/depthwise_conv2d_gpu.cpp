@@ -31,6 +31,8 @@ public:
     Buffer<float> depthwise_filters;
     const int stride;
     RDom r;
+    Pipeline auto_depthwiseconv;
+
     // Constructor parameters:
     //  input: 4-D tensor of shape [batch_size, in_height, in_width, in_channels].
     //  depthwise_filters: 4-D tensor of shape [filter_height, filter_width, in_channels, channel_multiplier].
@@ -55,12 +57,35 @@ public:
         r = RDom(0, kernel_size, 0, kernel_size);
         
         depthwise_conv(n, x, y, co) += depthwise_filters(r.x, r.y, co / channel_multiplier, co % channel_multiplier) * pad(n, stride * x + r.x - offset, stride * y + r.y - offset, co / channel_multiplier);
+        auto_depthwiseconv = Pipeline(depthwise_conv);
     }
     
     // Get a buffer with the shape of the output.
     Buffer<float> get_output() {
         Buffer<float> output(input.dim(0).extent(), input.dim(1).extent(), input.dim(2).extent(), depthwise_filters.dim(2).extent() * depthwise_filters.dim(3).extent());
         return output;
+    }
+
+    //  input_shape: 4-D tensor of shape [batch_size, in_height, in_width, in_channels].
+    //  filters_shape: 4-D tensor of shape [filter_height, filter_width, in_channels, channel_multiplier].
+    void auto_schedule_conv2d(string const &scheduler, vector<int> const &input_shape, vector<int> const &filter_shape) {
+        pad.set_estimates({
+            {0, input_shape[0]},
+            {0, input_shape[1] + filter_shape[0] - 1},
+            {0, input_shape[2] + filter_shape[1] - 1},
+            {0, input_shape[3]}});
+
+        depthwise_conv.set_estimates({
+            {0, input_shape[0]},
+            {0, input_shape[1]},
+            {0, input_shape[2]},
+            {0, filter_shape[2] * filter_shape[3]}});
+        
+        Target target = get_jit_target_from_environment();
+
+        auto_depthwiseconv.auto_schedule(scheduler, target);
+
+        auto_depthwiseconv.compile_jit(target);
     }
 
     // Now a schedule that uses CUDA or OpenCL.
@@ -92,12 +117,16 @@ public:
         return true;
     }
 
-    void test_performance(int num_runs=100) {
+    void test_performance(int num_runs=100, bool auto_schedule=true) {
         // Test the performance of the scheduled DepthwiseConv2DLayerGPU.
         Buffer<float> output = this->get_output();
 
         // Run the filter once to initialize any GPU runtime state.
-        depthwise_conv.realize(output);
+        if (auto_schedule) {
+            auto_depthwiseconv.realize(output);
+        } else {
+            depthwise_conv.realize(output);
+        }
 
         // Run pipeline for multiple times.
         double total_time = 0.0;
@@ -105,7 +134,11 @@ public:
         for (int i = 0; i < num_runs; i++) {
 
             double t1 = current_time();
-            depthwise_conv.realize(output);
+            if (auto_schedule) {
+                auto_depthwiseconv.realize(output);
+            } else {
+                depthwise_conv.realize(output);
+            }
 
             // Force any GPU code to finish by copying the buffer back to the CPU.
             output.copy_to_host();
@@ -134,6 +167,23 @@ int main(int argc, char **argv) {
     //   kernel_size: width and height of the filters. (3 for 3 x 3 conv layer).
     //   stride: the stride for sliding window.
     const int batch_size = 8, width = 120, height = 100, channels_in = 3, channel_multiplier = 2, kernel_size = 5, stride = 1;
+    bool auto_schedule = true;
+    if (argc != 3) {
+        fprintf(stderr, "Usage: .\\conv2d_gpu true or false autoscheduler\n");
+        return 1;
+    }
+
+    std::string auto_s = argv[1];
+    std::string scheduler = argv[2];
+
+    if (auto_s == "false") {
+        auto_schedule = false;
+    }
+
+    load_plugin("autoschedule_adams2019");
+    load_plugin("autoschedule_li2018");
+
+    
 
     // Generate random input.
     // Input shape follows TensorFlow convention (N, H, W, C)
@@ -166,10 +216,16 @@ int main(int argc, char **argv) {
 
     printf("Running pipeline on GPU:\n");
     DepthwiseConv2DLayerGPU conv_layer(input, depthwise_filters, stride);
-    conv_layer.schedule_for_gpu();
 
-    printf("Testing performance on GPU:\n");
-    conv_layer.test_performance();
+    if (!auto_schedule) {
+        conv_layer.schedule_for_gpu();
+        printf("Testing performance on GPU:\n");
+        conv_layer.test_performance();
+    } else {
+        printf("Testing auto schedule performance:\n");
+        conv_layer.auto_schedule_conv2d(scheduler, { batch_size, height, width, channels_in }, { kernel_size, kernel_size, channels_in, channel_multiplier });
+        conv_layer.test_performance(100, true);
+    }
 
     return 0;
 }

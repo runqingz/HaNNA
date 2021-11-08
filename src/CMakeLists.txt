@@ -9,4 +9,4 @@ set(CMAKE_CXX_EXTENSIONS NO)
 
 
 add_subdirectory(kernel)
-add_subdirectory(resnet_50)
+#add_subdirectory(resnet_50)

@@ -39,3 +39,5 @@ share/*
 .DS_Store
 src/resnet_50/weights/*
 src/resnet_50/output/*
+.vs/*
+out/*
