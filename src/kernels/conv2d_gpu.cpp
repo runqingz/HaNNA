@@ -3,15 +3,13 @@
 
 // On linux, you can compile and run it like so:
 // g++ conv2d_gpu.cpp -g -std=c++17 -I <path/to/Halide.h> -I <path/to/tools/halide_image_io.h> -L <path/to/libHalide.so> -lHalide `libpng-config --cflags --ldflags` -ljpeg -lpthread -ldl -o conv2d_gpu
-// LD_LIBRARY_PATH=<path/to/libHalide.so> ./conv2d_gpu useAutoSchedule autoscheduler
-// useAutoSchedule: boolean, true represents use auto scheduling, false otherwise.
-// autoscheuler: String, name of autoscheduler, current supports: Li2018, Adams2019
+// LD_LIBRARY_PATH=<path/to/libHalide.so> ./conv2d_gpu [autoscheduler]
+//   autoscheduler: String, name of autoscheduler, current supports: Li2018. When not provided, use manual schedule.
 
 // On os x:
 // g++ conv2d_gpu.cpp -g -std=c++17 -I <path/to/Halide.h> -I <path/to/tools/halide_image_io.h> -L <path/to/libHalide.so> -lHalide `libpng-config --cflags --ldflags` -ljpeg -o conv2d_gpu
-// DYLD_LIBRARY_PATH=<path/to/libHalide.dylib> ./conv2d_gpu useAutoSchedule autoscheduler
-// useAutoSchedule: boolean, true represents use auto scheduling, false otherwise.
-// autoscheuler: String, name of autoscheduler, current supports: Li2018, Adams2019
+// DYLD_LIBRARY_PATH=<path/to/libHalide.dylib> ./conv2d_gpu [autoscheduler]
+//   autoscheduler: String, name of autoscheduler, current supports: Li2018. When not provided, use manual schedule.
 
 #include <stdio.h>
 #include <string>
@@ -33,15 +31,17 @@ public:
     Func pad, conv;
     Buffer<float> input, filters;
     const int stride;
+    const string scheduler;
     RDom r;
     Pipeline autoconv;
 
     // Constructor parameters:
     //  input: 4-D tensor of shape [batch_size, in_height, in_width, in_channels].
     //  filters: 4-D tensor of shape [filter_height, filter_width, in_channels, out_channels].
-    //  stride: int for the stride of the sliding window.
-    Conv2DLayerGPU(Buffer<float> input, Buffer<float> filters, const int stride)
-        : input(input), filters(filters), stride(stride){
+    //  stride: Int for the stride of the sliding window.
+    //  scheduler: String for the name of the autoscheduler to be used. Empty for manual schedule.
+    Conv2DLayerGPU(Buffer<float> input, Buffer<float> filters, const int stride, const string scheduler)
+        : input(input), filters(filters), stride(stride), scheduler(scheduler){
        
         // Make sure we have a square kernel.
         assert(filters.dim(0).extent() == filters.dim(1).extent());
@@ -58,14 +58,17 @@ public:
         const int offset = kernel_size / 2;
         const int in_channels = input.dim(3).extent();
         r = RDom(0, kernel_size, 0, kernel_size, 0, in_channels);
-            
+        
         conv(n, x, y, co) += filters(r.x, r.y, r.z, co) * pad(n, stride * x + r.x - offset, stride * y + r.y - offset, r.z);
-
-        autoconv = Pipeline(conv);
+        
+        // Pipline for autoscheduler. Will be skipped if autoscheduler is not used.
+        if (! scheduler.empty()){
+            autoconv = Pipeline(conv);
+        }
     }
-    
+        
     // Get a buffer with the shape of the output.
-    Buffer<float> get_output() {
+    Buffer<float> get_output_buffer() {
         Buffer<float> output(input.dim(0).extent(), input.dim(1).extent(), input.dim(2).extent(), filters.dim(3).extent());
         return output;
     }
@@ -78,60 +81,53 @@ public:
         if (!target.has_gpu_feature()) {
             return false;
         }
-
-        if (target.has_feature(Target::CUDA)) {
-            //CUDA will use cuda specific derivatives such as gpu_lane
-            conv.tile(x, y, x_outer, y_outer, x_inner, y_inner, 32, 32)
-            .fuse(x_outer, y_outer, tile_index)
-            .gpu_blocks(tile_index)
-            .gpu_threads(x_inner);
-        } else {
-            conv.tile(x, y, x_outer, y_outer, x_inner, y_inner, 32, 32)
-            .fuse(x_outer, y_outer, tile_index)
-            .gpu_blocks(tile_index)
-            .gpu_threads(x_inner);
-        }
         
+        if (scheduler.empty()) {
+            if (target.has_feature(Target::CUDA)) {
+                //CUDA will use cuda specific derivatives such as gpu_lane
+                conv.tile(x, y, x_outer, y_outer, x_inner, y_inner, 32, 32)
+                .fuse(x_outer, y_outer, tile_index)
+                .gpu_blocks(tile_index)
+                .gpu_threads(x_inner);
+            } else {
+                conv.tile(x, y, x_outer, y_outer, x_inner, y_inner, 32, 32)
+                .fuse(x_outer, y_outer, tile_index)
+                .gpu_blocks(tile_index)
+                .gpu_threads(x_inner);
+            }
+            
 
-        printf("Target: %s\n", target.to_string().c_str());
-        conv.compile_jit(target);
+            printf("Target: %s\n", target.to_string().c_str());
+            conv.compile_jit(target);
+        } else {
+            pad.set_estimates({
+                {0, input.dim(0).extent()},
+                {0, input.dim(1).extent()},
+                {0, input.dim(2).extent()},
+                {0, input.dim(3).extent()}});
+
+            conv.set_estimates({
+                {0, input.dim(0).extent()},
+                {0, input.dim(1).extent()},
+                {0, input.dim(2).extent()},
+                {0, filters.dim(3).extent()}});
+            
+            autoconv.auto_schedule(scheduler, target);
+            autoconv.compile_jit(target);
+        }
 
         return true;
     }
-    
 
-
-    // input_shape: 4-D tensor of shape [batch_size, in_height, in_width, in_channels].
-    // filter_shape: 4-D tensor of shape [filter_height, filter_width, in_channels, out_channels].
-    void auto_schedule_conv2d(string const &scheduler,vector<int> const &input_shape, vector<int> const &filter_shape) {
-        pad.set_estimates({
-            {0, input_shape[0]},
-            {0, input_shape[1] + filter_shape[0] - 1},
-            {0, input_shape[2] + filter_shape[1] - 1},
-            {0, input_shape[3]}});
-
-        conv.set_estimates({
-            {0, input_shape[0]},
-            {0, input_shape[1]},
-            {0, input_shape[2]},
-            {0, filter_shape[3]}});
-        
-        Target target = get_jit_target_from_environment();
-
-        autoconv.auto_schedule(scheduler, target);
-
-        autoconv.compile_jit(target);
-    }
-
-    void test_performance(int num_runs=100, bool auto_schedule=false) {
+    void test_performance(int num_runs=100) {
         // Test the performance of the scheduled Conv2DLayerGPU.
-        Buffer<float> output = this->get_output();
+        Buffer<float> output = this->get_output_buffer();
 
         // Run the filter once to initialize any GPU runtime state.
-        if (auto_schedule) {
-            autoconv.realize(output);
-        } else {
+        if (scheduler.empty()) {
             conv.realize(output);
+        } else {
+            autoconv.realize(output);
         }
 
         // Run pipeline for multiple times.
@@ -141,10 +137,10 @@ public:
 
             double t1 = current_time();
 
-            if (auto_schedule) {
-                autoconv.realize(output);
-            } else {
+            if (scheduler.empty()) {
                 conv.realize(output);
+            } else {
+                autoconv.realize(output);
             }
 
             // Force any GPU code to finish by copying the buffer back to the CPU.
@@ -174,23 +170,21 @@ int main(int argc, char **argv) {
     //   kernel_size: width and height of the filters. (3 for 3 x 3 conv layer).
     //   stride: the stride for sliding window.
     const int batch_size = 8, width = 120, height = 100, channels_in = 3, channels_out = 3, kernel_size = 5, stride = 1;
-    bool auto_schedule = true;
-
-    if (argc != 3) {
-        fprintf(stderr, "Usage: .\\conv2d_gpu true or false autoscheduler\n");
+    string scheduler = "";
+    
+    if (argc == 2) {
+        printf("Running performance test for Conv2DLayerGPU with autoscheduler: %s.\n", argv[1]);
+        scheduler = argv[1];
+        load_plugin("autoschedule_li2018");
+    } else if (argc == 1) {
+        printf("Running performance test for Conv2DLayerGPU with manual schedule.\n");
+    } else {
+        fprintf(stderr, "Usage: .//conv2d_gpu [autoscheduler]\n");
         return 1;
     }
 
-    std::string auto_s = argv[1];
-    std::string scheduler = argv[2];
-
-    if (auto_s == "false") {
-        auto_schedule = false;
-    }
     
-    load_plugin("autoschedule_adams2019");
-    load_plugin("autoschedule_li2018");
-
+    
     // Generate random input.
     // Input shape follows TensorFlow convention (N, H, W, C)
     printf("Generating input with dimensions: batch_size: %d, height: %d, width: %d, channels: %d\n", batch_size, height, width, channels_in);
@@ -221,17 +215,11 @@ int main(int argc, char **argv) {
     }
 
     printf("Running pipeline on GPU:\n");
-    Conv2DLayerGPU conv_layer(input, filters, stride);
+    Conv2DLayerGPU conv_layer(input, filters, stride, scheduler);
+    printf("%s", scheduler.c_str());
 
-    if (!auto_schedule) {
-        conv_layer.schedule_for_gpu();
-        printf("Testing performance on GPU:\n");
-        conv_layer.test_performance();
-    } else {
-        printf("Testing auto schedule performance:\n");
-        conv_layer.auto_schedule_conv2d(scheduler, { batch_size, height, width, channels_in }, { kernel_size, kernel_size, channels_in, channels_out });
-        conv_layer.test_performance(100, true);
-    }
+    conv_layer.schedule_for_gpu();
+    conv_layer.test_performance();
     
     return 0;
 }
@@ -251,8 +239,6 @@ Target find_gpu_target() {
     } else {
         features_to_try.push_back(Target::CUDA);
     }
-    // Uncomment the following lines to also try CUDA:
-    // features_to_try.push_back(Target::CUDA);
 
     for (Target::Feature f : features_to_try) {
         Target new_target = target.with_feature(f);
