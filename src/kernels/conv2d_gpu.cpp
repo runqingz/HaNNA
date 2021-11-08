@@ -50,13 +50,6 @@ public:
         pad = BoundaryConditions::constant_exterior(input, 0);
 
         // Apply filters.
-<<<<<<< HEAD:src/kernels/conv2d.cpp
-        int kernel_size = filters.dim(1).extent();
-        int offset = kernel_size / 2;
-        r = RDom(0, kernel_size, 0, kernel_size, 0, input.dim(3).extent());
-        conv(n, x, y, co) += filters(co, r.x, r.y, r.z) * pad(n, stride * x + r.x - offset, stride * y + r.y - offset, r.z);
-        autoconv = Pipeline(conv);
-=======
         const int kernel_size = filters.dim(0).extent();
         const int offset = kernel_size / 2;
         const int in_channels = input.dim(3).extent();
@@ -69,7 +62,6 @@ public:
     Buffer<float> get_output() {
         Buffer<float> output(input.dim(0).extent(), input.dim(1).extent(), input.dim(2).extent(), filters.dim(3).extent());
         return output;
->>>>>>> main:src/kernels/conv2d_gpu.cpp
     }
 
     // Now a schedule that uses CUDA or OpenCL.
