@@ -56,6 +56,8 @@ public:
         r = RDom(0, kernel_size, 0, kernel_size, 0, in_channels);
             
         conv(n, x, y, co) += filters(r.x, r.y, r.z, co) * pad(n, stride * x + r.x - offset, stride * y + r.y - offset, r.z);
+
+        autoconv = Pipeline(conv);
     }
     
     // Get a buffer with the shape of the output.
@@ -95,15 +97,24 @@ public:
     
 
 
-    //  input: 4-D tensor of shape [batch_size, in_height, in_width, in_channels].
-   //  filters: 4-D tensor of shape [out_channels, in_height, in_width, in_channels].
-    void auto_schedule_conv2d(vector<int> const &input_shape, vector<int> const &filter_shape) {
-        pad.set_estimates({ {0, input_shape[0]}, {0, input_shape[1] + filter_shape[1] - 1}, {0, input_shape[2] + filter_shape[2] - 1}, {0, input_shape[3]} });
-        conv.set_estimates({ {0, input_shape[0]}, {0, input_shape[1]}, {0, input_shape[2]}, {0, filter_shape[0]} });
-        
-        Target target = get_host_target();
+    // input_shape: 4-D tensor of shape [batch_size, in_height, in_width, in_channels].
+    // filter_shape: 4-D tensor of shape [filter_height, filter_width, in_channels, out_channels].
+    void auto_schedule_conv2d(string const &scheduler,vector<int> const &input_shape, vector<int> const &filter_shape) {
+        pad.set_estimates({
+            {0, input_shape[0]},
+            {0, input_shape[1] + filter_shape[0] - 1},
+            {0, input_shape[2] + filter_shape[1] - 1},
+            {0, input_shape[3]}});
 
-        autoconv.auto_schedule("Li2018", target);
+        conv.set_estimates({
+            {0, input_shape[0]},
+            {0, input_shape[1]},
+            {0, input_shape[2]},
+            {0, filter_shape[3]}});
+        
+        Target target = get_jit_target_from_environment();
+
+        autoconv.auto_schedule(scheduler, target);
 
         autoconv.compile_jit(target);
     }
@@ -159,7 +170,20 @@ int main(int argc, char **argv) {
     //   kernel_size: width and height of the filters. (3 for 3 x 3 conv layer).
     //   stride: the stride for sliding window.
     const int batch_size = 8, width = 120, height = 100, channels_in = 3, channels_out = 3, kernel_size = 5, stride = 1;
+    bool auto_schedule = true;
 
+    if (argc != 3) {
+        fprintf(stderr, "Usage: .\\conv2d_gpu true or false autoscheduler\n");
+        return 1;
+    }
+
+    std::string auto_s = argv[1];
+    std::string scheduler = argv[2];
+
+    if (auto_s == "false") {
+        auto_schedule = false;
+    }
+    
     load_plugin("autoschedule_adams2019");
     load_plugin("autoschedule_li2018");
 
@@ -194,14 +218,17 @@ int main(int argc, char **argv) {
 
     printf("Running pipeline on GPU:\n");
     Conv2DLayerGPU conv_layer(input, filters, stride);
-    conv_layer.schedule_for_gpu();
 
-    printf("Testing performance on GPU:\n");
-    conv_layer.test_performance();
-
-    //printf("Testing auto schedule performance:\n");
-    //conv_layer.auto_schedule_conv2d({ batch_size,height,width,channels_in }, { channels_out,kernel_size,kernel_size,channels_in });
-    //conv_layer.test_performance(100, true);
+    if (!auto_schedule) {
+        conv_layer.schedule_for_gpu();
+        printf("Testing performance on GPU:\n");
+        conv_layer.test_performance();
+    } else {
+        printf("Testing auto schedule performance:\n");
+        conv_layer.auto_schedule_conv2d(scheduler, { batch_size, height, width, channels_in }, { kernel_size, kernel_size, channels_in, channels_out });
+        conv_layer.test_performance(100, true);
+    }
+    
     return 0;
 }
 
