@@ -1,13 +1,13 @@
-// JIT Convolutional Layer on GPU
-// (See tf.nn.conv2d)
+// Depthwise Convolutional Layer on GPU
+// (See tf.nn.depthwise_conv2d)
 
 // On linux, you can compile and run it like so:
-// g++ conv2d_gpu.cpp -g -std=c++17 -I <path/to/Halide.h> -I <path/to/tools/halide_image_io.h> -L <path/to/libHalide.so> -lHalide `libpng-config --cflags --ldflags` -ljpeg -lpthread -ldl -o conv2d_gpu
-// LD_LIBRARY_PATH=<path/to/libHalide.so> ./conv2d_gpu
+// g++ depthwise_conv2d_gpu.cpp -g -std=c++17 -I <path/to/Halide.h> -I <path/to/tools/halide_image_io.h> -L <path/to/libHalide.so> -lHalide `libpng-config --cflags --ldflags` -ljpeg -lpthread -ldl -o depthwise_conv2d_gpu
+// LD_LIBRARY_PATH=<path/to/libHalide.so> ./depthwise_conv2d_gpu
 
 // On os x:
-// g++ conv2d_gpu.cpp -g -std=c++17 -I <path/to/Halide.h> -I <path/to/tools/halide_image_io.h> -L <path/to/libHalide.so> -lHalide `libpng-config --cflags --ldflags` -ljpeg -o conv2d_gpu
-// DYLD_LIBRARY_PATH=<path/to/libHalide.dylib> ./conv2d_gpu
+// g++ depthwise_conv2d_gpu.cpp -g -std=c++17 -I <path/to/Halide.h> -I <path/to/tools/halide_image_io.h> -L <path/to/libHalide.so> -lHalide `libpng-config --cflags --ldflags` -ljpeg -o depthwise_conv2d_gpu
+// DYLD_LIBRARY_PATH=<path/to/libHalide.dylib> ./depthwise_conv2d_gpu
 #include <stdio.h>
 #include <string>
 #include "Halide.h"
@@ -19,13 +19,13 @@ using namespace Halide::Tools;
 
 Target find_gpu_target();
 
-// DepthSeparableConv2DLayerGPU follows the tf.nn.tf.nn.depthwise_conv2d implementation of 
-// depth separable conv2d layer.
+// DepthwiseConv2DLayerGPU follows the tf.nn.depthwise_conv2d implementation of
+// depthwise conv2d layer.
 // Note that in this implementation no bias or activation function is applied.
 // Data must follows NHWC format.
-class DepthSeparableConv2DLayerGPU {
+class DepthwiseConv2DLayerGPU {
 public:
-    Var n, x, y, ci, cm, co, x_outer, y_outer, x_inner, y_inner, tile_index;
+    Var n, x, y, ci, co;
     Func pad, depthwise_conv;
     Buffer<float> input;
     Buffer<float> depthwise_filters;
@@ -35,7 +35,7 @@ public:
     //  input: 4-D tensor of shape [batch_size, in_height, in_width, in_channels].
     //  depthwise_filters: 4-D tensor of shape [filter_height, filter_width, in_channels, channel_multiplier].
     //  stride: int for the stride of the sliding window.
-    DepthSeparableConv2DLayerGPU(Buffer<float> input, Buffer<float> depthwise_filters, const int stride)
+    DepthwiseConv2DLayerGPU(Buffer<float> input, Buffer<float> depthwise_filters, const int stride)
         : input(input), depthwise_filters(depthwise_filters), stride(stride) {
 
         // Make sure we have a square kernel.
@@ -49,18 +49,24 @@ public:
         pad = BoundaryConditions::constant_exterior(input, 0);
 
         // Apply filters.
-        //# of ci
-        Expr channels = depthwise_filters.dim(2).extent();
-
-        int kernel_size = depthwise_filters.dim(1).extent();
-        int offset = kernel_size / 2;
+        const int kernel_size = depthwise_filters.dim(1).extent();
+        const int offset = kernel_size / 2;
+        const int channel_multiplier = depthwise_filters.dim(3).extent();
         r = RDom(0, kernel_size, 0, kernel_size);
-        //co = cm * channels + ci -> ci = co % channels, cm = co / channels
-        depthwise_conv(n, x, y, co) += depthwise_filters(r.x, r.y, co % channels, co / channels) * pad(n, stride * x + r.x - offset, stride * y + r.y - offset, co % channels);
+        
+        depthwise_conv(n, x, y, co) += depthwise_filters(r.x, r.y, co / channel_multiplier, co % channel_multiplier) * pad(n, stride * x + r.x - offset, stride * y + r.y - offset, co / channel_multiplier);
+    }
+    
+    // Get a buffer with the shape of the output.
+    Buffer<float> get_output() {
+        Buffer<float> output(input.dim(0).extent(), input.dim(1).extent(), input.dim(2).extent(), depthwise_filters.dim(2).extent() * depthwise_filters.dim(3).extent());
+        return output;
     }
 
     // Now a schedule that uses CUDA or OpenCL.
     bool schedule_for_gpu() {
+        Var x_outer, y_outer, x_inner, y_inner, tile_index;
+        
         Target target = find_gpu_target();
         if (!target.has_gpu_feature()) {
             return false;
@@ -87,8 +93,8 @@ public:
     }
 
     void test_performance(int num_runs=100) {
-        // Test the performance of the scheduled DepthSeparableConv2DLayerGPU.
-        Buffer<float> output(input.dim(0).extent(), input.dim(1).extent(), input.dim(2).extent(), depthwise_filters.dim(2).extent() * depthwise_filters.dim(3).extent());
+        // Test the performance of the scheduled DepthwiseConv2DLayerGPU.
+        Buffer<float> output = this->get_output();
 
         // Run the filter once to initialize any GPU runtime state.
         depthwise_conv.realize(output);
@@ -122,12 +128,12 @@ int main(int argc, char **argv) {
     // Params:
     //   batch_size: number of images (in a single batch).
     //   channels_in: number of input channels (depth of the input).
-    //   channels_multipliers: number of filters applied to each input channel (output is channels_in * channel_multiplier channels).
+    //   channel_multiplier: number of filters applied to each input channel (output has channels_in * channel_multiplier channels).
     //   height: height of the image.
     //   width: width of the image.
     //   kernel_size: width and height of the filters. (3 for 3 x 3 conv layer).
     //   stride: the stride for sliding window.
-    const int batch_size = 8, width = 120, height = 100, channels_in = 3, channels_multipliers = 10, kernel_size = 5, stride = 1;
+    const int batch_size = 8, width = 120, height = 100, channels_in = 3, channel_multiplier = 2, kernel_size = 5, stride = 1;
 
     // Generate random input.
     // Input shape follows TensorFlow convention (N, H, W, C)
@@ -145,13 +151,13 @@ int main(int argc, char **argv) {
     }
 
     // Generate random filters.
-    printf("Generating filters with dimensions: height: %d, width: %d, channels: %d, channels multiplier: %d\n", kernel_size, kernel_size, channels_in, channels_multipliers);
+    printf("Generating filters with dimensions: height: %d, width: %d, channels: %d, channels multiplier: %d\n", kernel_size, kernel_size, channels_in, channel_multiplier);
 
-    Buffer<float> depthwise_filters(kernel_size, kernel_size, channels_in, channels_multipliers);
+    Buffer<float> depthwise_filters(kernel_size, kernel_size, channels_in, channel_multiplier);
     for (int x = 0; x < kernel_size; x++) {
         for (int y = 0; y < kernel_size; y++) {
             for (int ci = 0; ci < channels_in; ci++) {
-                for (int cm = 0; cm < channels_multipliers; cm++) {
+                for (int cm = 0; cm < channel_multiplier; cm++) {
                     depthwise_filters(x, y, ci, cm) = rand();
                 }         
             }
@@ -159,7 +165,7 @@ int main(int argc, char **argv) {
     }
 
     printf("Running pipeline on GPU:\n");
-    DepthSeparableConv2DLayerGPU conv_layer(input, depthwise_filters, stride);
+    DepthwiseConv2DLayerGPU conv_layer(input, depthwise_filters, stride);
     conv_layer.schedule_for_gpu();
 
     printf("Testing performance on GPU:\n");
