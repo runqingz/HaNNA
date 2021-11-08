@@ -91,11 +91,11 @@ public:
     void auto_schedule_conv2d(vector<int> const &input_shape, vector<int> const &filter_shape) {
         pad.set_estimates({ {0, input_shape[0]}, {0, input_shape[1] + filter_shape[1] - 1}, {0, input_shape[2] + filter_shape[2] - 1}, {0, input_shape[3]} });
         conv.set_estimates({ {0, input_shape[0]}, {0, input_shape[1]}, {0, input_shape[2]}, {0, filter_shape[0]} });
-        printf("1");
+        
         Target target = get_host_target();
-        printf("2");
+
         autoconv.auto_schedule("Li2018", target);
-        printf("3");
+
         autoconv.compile_jit(target);
     }
 
@@ -151,6 +151,9 @@ int main(int argc, char **argv) {
     //   stride: the stride for sliding window.
     const int batch_size = 8, width = 120, height = 100, channels_in = 3, channels_out = 3, kernel_size = 5, stride = 1;
 
+    load_plugin("autoschedule_adams2019");
+    load_plugin("autoschedule_li2018");
+
     // Generate random input.
     // Input shape follows TensorFlow convention (N, H, W, C)
     printf("Generating input with dimensions: batch_size: %d, height: %d, width: %d, channels: %d\n", batch_size, height, width, channels_in);
@@ -187,9 +190,9 @@ int main(int argc, char **argv) {
     printf("Testing performance on GPU:\n");
     conv_layer.test_performance();
 
-    printf("Testing auto schedule performance:\n");
-    conv_layer.auto_schedule_conv2d({ batch_size,height,width,channels_in }, { channels_out,kernel_size,kernel_size,channels_in });
-    conv_layer.test_performance(100, true);
+    //printf("Testing auto schedule performance:\n");
+    //conv_layer.auto_schedule_conv2d({ batch_size,height,width,channels_in }, { channels_out,kernel_size,kernel_size,channels_in });
+    //conv_layer.test_performance(100, true);
     return 0;
 }
 
