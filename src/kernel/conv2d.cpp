@@ -91,9 +91,11 @@ public:
     void auto_schedule_conv2d(vector<int> const &input_shape, vector<int> const &filter_shape) {
         pad.set_estimates({ {0, input_shape[0]}, {0, input_shape[1] + filter_shape[1] - 1}, {0, input_shape[2] + filter_shape[2] - 1}, {0, input_shape[3]} });
         conv.set_estimates({ {0, input_shape[0]}, {0, input_shape[1]}, {0, input_shape[2]}, {0, filter_shape[0]} });
-
+        printf("1");
         Target target = get_host_target();
-        autoconv.auto_schedule("Adams2019", target);
+        printf("2");
+        autoconv.auto_schedule("Li2018", target);
+        printf("3");
         autoconv.compile_jit(target);
     }
 
@@ -186,6 +188,7 @@ int main(int argc, char **argv) {
     conv_layer.test_performance();
 
     printf("Testing auto schedule performance:\n");
+    conv_layer.auto_schedule_conv2d({ batch_size,height,width,channels_in }, { channels_out,kernel_size,kernel_size,channels_in });
     conv_layer.test_performance(100, true);
     return 0;
 }
