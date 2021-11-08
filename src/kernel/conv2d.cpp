@@ -31,6 +31,7 @@ public:
     Buffer<float> filters;
     const int stride;
     RDom r;
+    Pipeline autoconv;
 
     // Constructor parameters:
     //  input: 4-D tensor of shape [batch_size, in_height, in_width, in_channels].
@@ -38,7 +39,7 @@ public:
     //  stride: int for the stride of the sliding window.
     Conv2DLayerGPU(Buffer<float> input, Buffer<float> filters, const int stride)
         : input(input), filters(filters), stride(stride){
-
+       
         // Make sure we have a square kernel.
         assert(filters.dim(1).extent() == filters.dim(2).extent());
         // Make sure we have a valid kernel (size is odd).
@@ -54,6 +55,7 @@ public:
         int offset = kernel_size / 2;
         r = RDom(0, kernel_size, 0, kernel_size, 0, input.dim(3).extent());
         conv(n, x, y, co) += filters(co, r.x, r.y, r.z) * pad(n, stride * x + r.x - offset, stride * y + r.y - offset, r.z);
+        autoconv = Pipeline(conv);
     }
 
     // Now a schedule that uses CUDA or OpenCL.
@@ -83,12 +85,28 @@ public:
         return true;
     }
 
-    void test_performance(int num_runs=100) {
+
+    //  input: 4-D tensor of shape [batch_size, in_height, in_width, in_channels].
+   //  filters: 4-D tensor of shape [out_channels, in_height, in_width, in_channels].
+    void auto_schedule_conv2d(vector<int> const &input_shape, vector<int> const &filter_shape) {
+        pad.set_estimates({ {0, input_shape[0]}, {0, input_shape[1] + filter_shape[1] - 1}, {0, input_shape[2] + filter_shape[2] - 1}, {0, input_shape[3]} });
+        conv.set_estimates({ {0, input_shape[0]}, {0, input_shape[1]}, {0, input_shape[2]}, {0, filter_shape[0]} });
+
+        Target target = get_host_target();
+        autoconv.auto_schedule("Adams2019", target);
+        autoconv.compile_jit(target);
+    }
+
+    void test_performance(int num_runs=100, bool auto_schedule=false) {
         // Test the performance of the scheduled Conv2DLayerGPU.
         Buffer<float> output(input.dim(0).extent(), input.dim(1).extent(), input.dim(2).extent(), filters.dim(0).extent());
 
         // Run the filter once to initialize any GPU runtime state.
-        conv.realize(output);
+        if (auto_schedule) {
+            autoconv.realize(output);
+        } else {
+            conv.realize(output);
+        }
 
         // Run pipeline for multiple times.
         double total_time = 0.0;
@@ -96,7 +114,12 @@ public:
         for (int i = 0; i < num_runs; i++) {
 
             double t1 = current_time();
-            conv.realize(output);
+
+            if (auto_schedule) {
+                autoconv.realize(output);
+            } else {
+                conv.realize(output);
+            }
 
             // Force any GPU code to finish by copying the buffer back to the CPU.
             output.copy_to_host();
@@ -162,6 +185,8 @@ int main(int argc, char **argv) {
     printf("Testing performance on GPU:\n");
     conv_layer.test_performance();
 
+    printf("Testing auto schedule performance:\n");
+    conv_layer.test_performance(100, true);
     return 0;
 }
 
