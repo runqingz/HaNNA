@@ -3,11 +3,15 @@
 
 // On linux, you can compile and run it like so:
 // g++ depthwise_conv2d_gpu.cpp -g -std=c++17 -I <path/to/Halide.h> -I <path/to/tools/halide_image_io.h> -L <path/to/libHalide.so> -lHalide `libpng-config --cflags --ldflags` -ljpeg -lpthread -ldl -o depthwise_conv2d_gpu
-// LD_LIBRARY_PATH=<path/to/libHalide.so> ./depthwise_conv2d_gpu
+// LD_LIBRARY_PATH=<path/to/libHalide.so> ./depthwise_conv2d_gpu useAutoSchedule autoscheduler
+// useAutoSchedule: boolean, true represents use auto scheduling, false otherwise.
+// autoscheuler: String, name of autoscheduler, current supports: Li2018, Adams2019
 
 // On os x:
 // g++ depthwise_conv2d_gpu.cpp -g -std=c++17 -I <path/to/Halide.h> -I <path/to/tools/halide_image_io.h> -L <path/to/libHalide.so> -lHalide `libpng-config --cflags --ldflags` -ljpeg -o depthwise_conv2d_gpu
-// DYLD_LIBRARY_PATH=<path/to/libHalide.dylib> ./depthwise_conv2d_gpu
+// DYLD_LIBRARY_PATH=<path/to/libHalide.dylib> ./depthwise_conv2d_gpu useAutoSchedule autoscheduler
+// useAutoSchedule: boolean, true represents use auto scheduling, false otherwise.
+// autoscheuler: String, name of autoscheduler, current supports: Li2018, Adams2019
 #include <stdio.h>
 #include <string>
 #include "Halide.h"
