@@ -1,17 +1,15 @@
 // Depthwise Convolutional Layer on GPU
-// (See tf.nn.depthwise_conv2d)
+// (See tf.nn.relu)
 
 // On linux, you can compile and run it like so:
 // g++ relu_gpu.cpp -g -std=c++17 -I <path/to/Halide.h> -I <path/to/tools/halide_image_io.h> -L <path/to/libHalide.so> -lHalide `libpng-config --cflags --ldflags` -ljpeg -lpthread -ldl -o relu_gpu
-// LD_LIBRARY_PATH=<path/to/libHalide.so> ./relu_gpu useAutoSchedule autoscheduler
-// useAutoSchedule: boolean, true represents use auto scheduling, false otherwise.
-// autoscheuler: String, name of autoscheduler, current supports: Li2018, Adams2019
+// LD_LIBRARY_PATH=<path/to/libHalide.so> ./relu_gpu <autoscheduler>
+// autoscheuler: String, name of autoscheduler, current supports: Li2018
 
 // On os x:
-// g++ depthwise_conv2d_gpu.cpp -g -std=c++17 -I <path/to/Halide.h> -I <path/to/tools/halide_image_io.h> -L <path/to/libHalide.so> -lHalide `libpng-config --cflags --ldflags` -ljpeg -o relu_gpu
-// DYLD_LIBRARY_PATH=<path/to/libHalide.dylib> ./relu_gpu useAutoSchedule autoscheduler
-// useAutoSchedule: boolean, true represents use auto scheduling, false otherwise.
-// autoscheuler: String, name of autoscheduler, current supports: Li2018, Adams2019
+// g++ relu_gpu.cpp -g -std=c++17 -I <path/to/Halide.h> -I <path/to/tools/halide_image_io.h> -L <path/to/libHalide.so> -lHalide `libpng-config --cflags --ldflags` -ljpeg -o relu_gpu
+// DYLD_LIBRARY_PATH=<path/to/libHalide.dylib> ./relu_gpu  <autoscheduler>
+// autoscheuler: String, name of autoscheduler, current supports: Li2018
 #include <stdio.h>
 #include <string>
 #include "Halide.h"
@@ -23,9 +21,8 @@ using namespace Halide::Tools;
 
 Target find_gpu_target();
 
-// DepthwiseConv2DLayerGPU follows the tf.nn.depthwise_conv2d implementation of
-// depthwise conv2d layer.
-// Note that in this implementation no bias or activation function is applied.
+// Relu follows the tf.nn.relu implementation of
+// relu activation layer.
 // Data must follows NHWC format.
 class ReluLayerGPU {
 public:
@@ -38,7 +35,6 @@ public:
 
     // Constructor parameters:
     //  input: 4-D tensor of shape [batch_size, in_height, in_width, in_channels].
-    //  stride: int for the stride of the sliding window.
     ReluLayerGPU(Buffer<float> input, string scheduler)
         : input(input), scheduler(scheduler) {
 
