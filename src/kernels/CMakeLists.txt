@@ -16,3 +16,6 @@ target_link_libraries(conv2d_gpu PRIVATE Halide::Halide Halide::ImageIO Halide::
 add_executable(depthwise_conv2d_gpu depthwise_conv2d_gpu.cpp)
 target_link_libraries(depthwise_conv2d_gpu PRIVATE Halide::Halide Halide::ImageIO Halide::Tools)
 
+add_executable(relu_gpu relu_gpu.cpp)
+target_link_libraries(relu_gpu PRIVATE Halide::Halide Halide::ImageIO Halide::Tools)
+
