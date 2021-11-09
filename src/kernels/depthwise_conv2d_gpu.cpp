@@ -213,11 +213,11 @@ int main(int argc, char **argv) {
     }
 
     printf("Running pipeline on GPU:\n");
-    DepthwiseConv2DLayerGPU conv_layer(input, depthwise_filters, stride);
+    DepthwiseConv2DLayerGPU depthwise_conv_layer(input, depthwise_filters, stride);
 
-    conv_layer.schedule_for_gpu();
+    depthwise_conv_layer.schedule_for_gpu();
     printf("Testing performance on GPU:\n");
-    conv_layer.test_performance();
+    depthwise_conv_layer.test_performance();
 
     return 0;
 }
