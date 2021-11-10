@@ -6,7 +6,6 @@ project(kernels)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED YES)
 set(CMAKE_CXX_EXTENSIONS NO)
-list(APPEND CMAKE_PREFIX_PATH "E:/dev/vcpkg/installed/x64-windows")
 
 find_package(Halide REQUIRED)
 
