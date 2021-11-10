@@ -144,7 +144,7 @@ public:
             }
 
             // Force any GPU code to finish by copying the buffer back to the CPU.
-            output.copy_to_host();
+            output.device_sync();
 
             double t2 = current_time();
 
@@ -182,8 +182,6 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Usage: .//conv2d_gpu [autoscheduler]\n");
         return 1;
     }
-
-    
     
     // Generate random input.
     // Input shape follows TensorFlow convention (N, H, W, C)
