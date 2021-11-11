@@ -144,7 +144,7 @@ public:
             }
 
             // Force any GPU code to finish by copying the buffer back to the CPU.
-            output.copy_to_host();
+            output.device_sync();
 
             double t2 = current_time();
 

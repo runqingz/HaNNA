@@ -1,4 +1,4 @@
-// Depthwise Convolutional Layer on GPU
+// Relu Layer on GPU
 // (See tf.nn.relu)
 
 // On linux, you can compile and run it like so:
@@ -90,7 +90,7 @@ public:
     }
 
     void test_performance(int num_runs = 100) {
-        // Test the performance of the scheduled DepthwiseConv2DLayerGPU.
+        // Test the performance of the scheduled ReluLayerGPU.
         Buffer<float> output = this->get_output_buffer();
 
         // Run the filter once to initialize any GPU runtime state.
@@ -115,7 +115,7 @@ public:
             }
 
             // Force any GPU code to finish by copying the buffer back to the CPU.
-            output.copy_to_host();
+            output.device_sync();
 
             double t2 = current_time();
 
@@ -141,15 +141,15 @@ int main(int argc, char** argv) {
     string scheduler = "";
 
     if (argc == 2) {
-        printf("Running performance test for Conv2DLayerGPU with autoscheduler: %s.\n", argv[1]);
+        printf("Running performance test for ReluLayerGPU with autoscheduler: %s.\n", argv[1]);
         scheduler = argv[1];
         load_plugin("autoschedule_li2018");
     }
     else if (argc == 1) {
-        printf("Running performance test for Conv2DLayerGPU with manual schedule.\n");
+        printf("Running performance test for ReluLayerGPU with manual schedule.\n");
     }
     else {
-        fprintf(stderr, "Usage: .//conv2d_gpu [autoscheduler]\n");
+        fprintf(stderr, "Usage: .//relu_gpu [autoscheduler]\n");
         return 1;
     }
 

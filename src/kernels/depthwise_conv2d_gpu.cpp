@@ -141,7 +141,7 @@ public:
             }
 
             // Force any GPU code to finish by copying the buffer back to the CPU.
-            output.copy_to_host();
+            output.device_sync();
 
             double t2 = current_time();
 
@@ -171,15 +171,15 @@ int main(int argc, char **argv) {
     string scheduler = "";
 
     if (argc == 2) {
-        printf("Running performance test for Conv2DLayerGPU with autoscheduler: %s.\n", argv[1]);
+        printf("Running performance test for DepthwiseConv2DLayerGPU with autoscheduler: %s.\n", argv[1]);
         scheduler = argv[1];
         load_plugin("autoschedule_li2018");
     }
     else if (argc == 1) {
-        printf("Running performance test for Conv2DLayerGPU with manual schedule.\n");
+        printf("Running performance test for DepthwiseConv2DLayerGPU with manual schedule.\n");
     }
     else {
-        fprintf(stderr, "Usage: .//conv2d_gpu [autoscheduler]\n");
+        fprintf(stderr, "Usage: .//depthwise_conv2d_gpu [autoscheduler]\n");
         return 1;
     }
 
