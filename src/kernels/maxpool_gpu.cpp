@@ -28,7 +28,7 @@ Target find_gpu_target();
 class MaxpoolLayerGPU {
 public:
     Var n, x, y, ci;
-    Func subsample, maxpool;
+    Func maxpool;
     Buffer<float> input;
     const int stride, kernel_size;
     const string scheduler;
