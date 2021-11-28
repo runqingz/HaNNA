@@ -26,7 +26,7 @@ Target find_gpu_target();
 // Data must follows NHWC format.
 class ReluLayerGPU {
 public:
-    Var n, x, y, ci;
+    Var n, x, y, c;
     Func relu;
     Buffer<float> input;
     Pipeline auto_relu;
@@ -38,7 +38,7 @@ public:
     ReluLayerGPU(Buffer<float> input, string scheduler)
         : input(input), scheduler(scheduler) {
 
-        relu(n, x, y, ci) = max(input(n, x ,y, ci) , 0);
+        relu(n, c, x, y) = max(input(n, c ,x, y) , 0);
         auto_relu = Pipeline(relu);
     }
 
@@ -50,7 +50,7 @@ public:
 
     // Now a schedule that uses CUDA or OpenCL.
     bool schedule_for_gpu() {
-        Var x_outer, y_outer, x_inner, y_inner, tile_index;
+        Var co, ci, x_outer, y_outer, x_inner, y_inner, tile_index, ni, no, t, ti, to, nc, nci, nco;
 
         Target target = find_gpu_target();
         if (!target.has_gpu_feature()) {
@@ -60,10 +60,44 @@ public:
         if (scheduler.empty()) {
             if (target.has_feature(Target::CUDA)) {
                 //CUDA will use cuda specific derivatives such as gpu_lane
+                
+                //Most intuitive starting point, however, work per gpu thread is incredibly small
+                //relu.gpu_tile(x, y, x_outer, y_outer, x_inner, y_inner, 32, 32);
+                //relu.reorder( y, x, ci, n);
+                /*
+                relu.tile(x, y, x_outer, y_outer, x_inner, y_inner, 8, 8)
+                    .fuse(x_outer, y_outer, tile_index)
+                    .vectorize(x_inner, 8)
+                    .gpu_blocks(tile_index)
+                    .gpu_threads(x_inner);
+            
                 relu.tile(x, y, x_outer, y_outer, x_inner, y_inner, 32, 32)
                     .fuse(x_outer, y_outer, tile_index)
                     .gpu_blocks(tile_index)
                     .gpu_threads(x_inner);
+                */
+
+                //relu.split(ci, ci_outer, ci_inner, 16);
+                /*relu.tile(x, y, x_outer, y_outer, x_inner, y_inner, 32, 32)
+                    .fuse(x_outer, y_outer, tile_index)
+                    .gpu_blocks(tile_index)
+                    .gpu_threads(x_inner)
+                    .vectorize(ci, 4);*/
+
+                ////////////////////////////////////////////////////////////
+                /*relu.tile(x, y, x_outer, y_outer, x_inner, y_inner, 32, 32)
+                    .fuse(x_outer, y_outer, tile_index)
+                    .vectorize(y_inner, 8)
+                    .gpu_blocks(tile_index);*/
+                ////////////////////////////////////////////////////////////
+
+                /*relu.tile(x, y, x_outer, y_outer, x_inner, y_inner, 16, 16)
+                    .vectorize(y_inner, 8)
+                    .gpu_blocks(x_outer, y_outer);*/
+
+                relu.tile(x, y, x_outer, y_outer, x_inner, y_inner, 4, 8)
+                    .vectorize(y_inner, 8)
+                    .gpu_blocks(x_outer, y_outer);
             }
             else {
                 relu.tile(x, y, x_outer, y_outer, x_inner, y_inner, 32, 32)
@@ -71,7 +105,7 @@ public:
                     .gpu_blocks(tile_index)
                     .gpu_threads(x_inner);
             }
-
+            
             printf("Target: %s\n", target.to_string().c_str());
             relu.compile_jit(target);
         }
@@ -137,7 +171,7 @@ int main(int argc, char** argv) {
     //   channels_in: number of input channels (depth of the input).
     //   height: height of the image.
     //   width: width of the image.
-    const int batch_size = 8, width = 120, height = 100, channels_in = 3;
+    const int batch_size = 1, width = 256, height = 256, channels_in = 128;
     string scheduler = "";
 
     if (argc == 2) {
@@ -157,12 +191,12 @@ int main(int argc, char** argv) {
     // Input shape follows TensorFlow convention (N, H, W, C)
     printf("Generating input with dimensions: batch_size: %d, height: %d, width: %d, channels: %d\n", batch_size, height, width, channels_in);
 
-    Buffer<float> input(batch_size, height, width, channels_in);
+    Buffer<float> input(batch_size, channels_in, height, width);
     for (int b = 0; b < batch_size; b++) {
-        for (int h = 0; h < height; h++) {
-            for (int w = 0; w < width; w++) {
-                for (int c = 0; c < channels_in; c++) {
-                    input(b, h, w, c) = rand();
+        for (int c = 0; c < channels_in; c++) {
+            for (int h = 0; h < height; h++) {
+                for (int w = 0; w < width; w++) {
+                    input(b, c, h, w) = rand();
                 }
             }
         }
