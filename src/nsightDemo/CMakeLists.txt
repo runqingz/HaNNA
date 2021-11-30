@@ -11,3 +11,6 @@ find_package(Halide REQUIRED)
 
 add_executable(blur blur.cpp)
 target_link_libraries(blur PRIVATE Halide::Halide Halide::ImageIO Halide::Tools)
+
+add_executable(blur_x blur_x.cpp)
+target_link_libraries(blur_x PRIVATE Halide::Halide Halide::ImageIO Halide::Tools)
