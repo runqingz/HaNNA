@@ -21,6 +21,7 @@ using namespace Halide;
 using namespace Halide::Tools;
 
 Target find_gpu_target();
+void print_4d_buffer(Buffer<float> buf);
 
 // Conv2DLayerGPU follows the tf.nn.conv2d implementation of conv2d layer.
 // Note that in this implementation no bias or activation function is applied.
@@ -85,10 +86,10 @@ public:
         if (scheduler.empty()) {
             if (target.has_feature(Target::CUDA)) {
                 //CUDA will use cuda specific derivatives such as gpu_lane
-                conv.tile(x, y, x_outer, y_outer, x_inner, y_inner, 32, 32)
+                /*conv.tile(x, y, x_outer, y_outer, x_inner, y_inner, 32, 32)
                 .fuse(x_outer, y_outer, tile_index)
                 .gpu_blocks(tile_index)
-                .gpu_threads(x_inner);
+                .gpu_threads(x_inner);*/
             } else {
                 conv.tile(x, y, x_outer, y_outer, x_inner, y_inner, 32, 32)
                 .fuse(x_outer, y_outer, tile_index)
@@ -158,6 +159,22 @@ public:
         printf("Average: %1.4f milliseconds\n", total_time / num_runs);
         printf("Best: %1.4f milliseconds\n", best_time);
     }
+
+    void print_result() {
+        // Print result for correctness check.
+        Buffer<float> output = this->get_output_buffer();
+
+        // Run pipeline once.
+        if (scheduler.empty()) {
+            conv.realize(output);
+        }
+        else {
+            autoconv.realize(output);
+        }
+
+        // Print output to standard out.
+        print_4d_buffer(output);
+    }
 };
 
 int main(int argc, char **argv) {
@@ -169,17 +186,26 @@ int main(int argc, char **argv) {
     //   width: width of the image.
     //   kernel_size: width and height of the filters. (3 for 3 x 3 conv layer).
     //   stride: the stride for sliding window.
-    const int batch_size = 8, width = 120, height = 100, channels_in = 3, channels_out = 3, kernel_size = 5, stride = 1;
+    const int batch_size = 1, width = 8, height = 8, channels_in = 2, channels_out = 2, kernel_size = 3, stride = 1;
     string scheduler = "";
+    bool check = false;
     
     if (argc == 2) {
-        printf("Running performance test for Conv2DLayerGPU with autoscheduler: %s.\n", argv[1]);
-        scheduler = argv[1];
-        load_plugin("autoschedule_li2018");
+        string arg = argv[1];
+        if (arg == "Li2018") {
+            printf("Running performance test for Conv2DLayerGPU with autoscheduler: %s.\n", arg);
+            scheduler = arg;
+            load_plugin("autoschedule_li2018");
+        }
+        else if (arg == "--check" || arg == "-c") {
+            printf("Running correctness check.\n");
+            check = true;
+        }
     } else if (argc == 1) {
         printf("Running performance test for Conv2DLayerGPU with manual schedule.\n");
     } else {
         fprintf(stderr, "Usage: .//conv2d_gpu [autoscheduler]\n");
+        fprintf(stderr, "       .//conv2d_gpu [--check/-c]\n");
         return 1;
     }
     
@@ -192,7 +218,12 @@ int main(int argc, char **argv) {
         for (int h = 0; h < height; h++) {
             for (int w = 0; w < width; w++) {
                 for (int c = 0; c < channels_in; c++) {
-                    input(b, h, w, c) = rand();
+                    if (check) {
+                        input(b, h, w, c) = 0.1f * (b + h + w + c);
+                    }
+                    else {
+                        input(b, h, w, c) = rand();
+                    }
                 }
             }
         }
@@ -206,7 +237,12 @@ int main(int argc, char **argv) {
         for (int y = 0; y < kernel_size; y++) {
             for (int ci = 0; ci < channels_in; ci++) {
                 for (int co = 0; co < channels_out; co++) {
-                    filters(x, y, ci, co) = rand();
+                    if (check) {
+                        filters(x, y, ci, co) = 0.1f * (x + y + ci + co);
+                    }
+                    else {
+                        filters(x, y, ci, co) = rand();
+                    }
                 }
             }
         }
@@ -217,7 +253,12 @@ int main(int argc, char **argv) {
     printf("%s", scheduler.c_str());
 
     conv_layer.schedule_for_gpu();
-    conv_layer.test_performance();
+    if (check) {
+        conv_layer.print_result();
+    }
+    else {
+        conv_layer.test_performance();
+    }
     
     return 0;
 }
@@ -247,4 +288,35 @@ Target find_gpu_target() {
 
     printf("Requested GPU(s) are not supported. (Do you have the proper hardware and/or driver installed?)\n");
     return target;
+}
+
+void print_4d_buffer(Buffer<float> buf) {
+    // Print out the values in realized buffer.
+    // Input must be a 4-dimensional array of floats.
+    const int b_lo = buf.min(0);
+    const int b_hi = b_lo + buf.extent(0);
+    const int h_lo = buf.min(1);
+    const int h_hi = h_lo + buf.extent(1);
+    const int w_lo = buf.min(2);
+    const int w_hi = w_lo + buf.extent(2);
+    const int c_lo = buf.min(3);
+    const int c_hi = c_lo + buf.extent(3);
+
+    std::cout << "[";
+    for (int b = b_lo; b < b_hi; b++) {
+        std::cout << "[";
+        for (int h = h_lo; h < h_hi; h++) {
+            std::cout << "[";
+            for (int w = w_lo; w < w_hi; w++) {
+                std::cout << "[";
+                for (int c = c_lo; c < c_hi; c++) {
+                    printf("%.2f ", buf(b, h, w, c));
+                }
+                std::cout << "]\n";
+            }
+            std::cout << "]";
+        }
+        std::cout << "]";
+    }
+    std::cout << "]\n";
 }
