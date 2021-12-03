@@ -38,7 +38,7 @@ public:
     ReluLayerGPU(Buffer<float> input, string scheduler)
         : input(input), scheduler(scheduler) {
 
-        relu(n, x, y, ci) = max(input(n, x ,y, ci) , 0);
+        relu(n, ci, x, y) = max(input(n, ci, x, y) , 0);
         auto_relu = Pipeline(relu);
     }
 
@@ -50,7 +50,7 @@ public:
 
     // Now a schedule that uses CUDA or OpenCL.
     bool schedule_for_gpu() {
-        Var x_outer, y_outer, x_inner, y_inner, tile_index;
+        Var xo, yo, xi, yi, tile_index, nc, nco, nci;
 
         Target target = find_gpu_target();
         if (!target.has_gpu_feature()) {
@@ -59,17 +59,23 @@ public:
 
         if (scheduler.empty()) {
             if (target.has_feature(Target::CUDA)) {
-                //CUDA will use cuda specific derivatives such as gpu_lane
-                relu.tile(x, y, x_outer, y_outer, x_inner, y_inner, 32, 32)
-                    .fuse(x_outer, y_outer, tile_index)
+                
+                /*relu.tile(x, y, xo, yo, xi, y_inner, 32, 32)
+                    .fuse(xo, yo, tile_index)
                     .gpu_blocks(tile_index)
-                    .gpu_threads(x_inner);
+                    .gpu_threads(xi);*/
+
+                relu.fuse(n, ci, nc)
+                    .tile(nc, x, nco, xo, nci, xi, 16, 16)
+                    .gpu_blocks(nco, y)
+                    .gpu_threads(nci, xi);
+
             }
             else {
-                relu.tile(x, y, x_outer, y_outer, x_inner, y_inner, 32, 32)
+                /*relu.tile(x, y, x_outer, y_outer, x_inner, y_inner, 32, 32)
                     .fuse(x_outer, y_outer, tile_index)
                     .gpu_blocks(tile_index)
-                    .gpu_threads(x_inner);
+                    .gpu_threads(x_inner);*/
             }
 
             printf("Target: %s\n", target.to_string().c_str());
@@ -137,7 +143,7 @@ int main(int argc, char** argv) {
     //   channels_in: number of input channels (depth of the input).
     //   height: height of the image.
     //   width: width of the image.
-    const int batch_size = 8, width = 120, height = 100, channels_in = 3;
+    const int batch_size = 8, width = 256, height = 256, channels_in = 128;
     string scheduler = "";
 
     if (argc == 2) {
@@ -157,12 +163,12 @@ int main(int argc, char** argv) {
     // Input shape follows TensorFlow convention (N, H, W, C)
     printf("Generating input with dimensions: batch_size: %d, height: %d, width: %d, channels: %d\n", batch_size, height, width, channels_in);
 
-    Buffer<float> input(batch_size, height, width, channels_in);
+    Buffer<float> input(batch_size, channels_in, height, width);
     for (int b = 0; b < batch_size; b++) {
         for (int h = 0; h < height; h++) {
             for (int w = 0; w < width; w++) {
                 for (int c = 0; c < channels_in; c++) {
-                    input(b, h, w, c) = rand();
+                    input(b, c, h, w) = rand();
                 }
             }
         }
