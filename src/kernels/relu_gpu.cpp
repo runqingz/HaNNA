@@ -38,7 +38,7 @@ public:
     ReluLayerGPU(Buffer<float> input, string scheduler)
         : input(input), scheduler(scheduler) {
 
-        relu(n, ci, x, y) = max(input(n, ci, x, y) , 0);
+        //relu(n, ci, x, y) = max(input(n, ci, x, y) , 0);
         auto_relu = Pipeline(relu);
     }
 
@@ -69,7 +69,6 @@ public:
                     .tile(nc, x, nco, xo, nci, xi, 16, 16)
                     .gpu_blocks(nco, y)
                     .gpu_threads(nci, xi);
-
             }
             else {
                 /*relu.tile(x, y, x_outer, y_outer, x_inner, y_inner, 32, 32)
