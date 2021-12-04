@@ -1,5 +1,5 @@
-# Script for Testing and Benchmarking Convolutional Layer on GPU
-# (See tf.nn.conv2d)
+# Script for Testing and Benchmarking Relu Layer on GPU
+# (See tf.nn.relu)
 
 from functools import cache
 import tensorflow as tf
@@ -14,7 +14,7 @@ if __name__ == "__main__":
     batch_size = 8
     width = 256
     height = 256
-    channels_in = 128
+    channels_in = 3
 
     num_runs = 100
 
@@ -39,18 +39,19 @@ if __name__ == "__main__":
         out = tf.nn.relu(input)
         print(out)
     else:
-        with tf.device('/GPU:0'):
+        with tf.device('/CPU:0'):
             input = tf.random.uniform([batch_size, height, width, channels_in])
-            best = None
-            times = []
-            
-            for i in range(num_runs):
-                start = time.time()
-                out = tf.nn.relu(input)
-                end = time.time()
-                t = end - start
-                times.append(t)
-                if not best or t < best: best = t
-            avg_time = sum(times) / len(times)
-            print('Average: {} ms'.format(1000 * avg_time))
-            print('Best: {} ms'.format(1000 * best))
+        best = None
+        times = []
+
+        for i in range(num_runs):
+            start = time.time()
+            out = tf.nn.relu(input)
+            end = time.time()
+            t = (end - start) * 1000
+            times.append(t)
+            if not best or t < best: best = t
+        avg_time = sum(times) / len(times)
+        print(times)
+        print('Average: {} ms'.format(1000 * avg_time))
+        print('Best: {} ms'.format(1000 * best))

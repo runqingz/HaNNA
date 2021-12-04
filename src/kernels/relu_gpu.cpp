@@ -20,6 +20,7 @@ using namespace Halide;
 using namespace Halide::Tools;
 
 Target find_gpu_target();
+void print_4d_buffer(Buffer<float> buf);
 
 // Relu follows the tf.nn.relu implementation of
 // relu activation layer.
@@ -38,7 +39,7 @@ public:
     ReluLayerGPU(Buffer<float> input, string scheduler)
         : input(input), scheduler(scheduler) {
 
-        //relu(n, ci, x, y) = max(input(n, ci, x, y) , 0);
+        relu(n, ci, x, y) = max(input(n, ci, x, y) , 0.f);
         auto_relu = Pipeline(relu);
     }
 
@@ -59,16 +60,26 @@ public:
 
         if (scheduler.empty()) {
             if (target.has_feature(Target::CUDA)) {
-                
                 /*relu.tile(x, y, xo, yo, xi, y_inner, 32, 32)
                     .fuse(xo, yo, tile_index)
                     .gpu_blocks(tile_index)
                     .gpu_threads(xi);*/
 
-                relu.fuse(n, ci, nc)
+                /*relu.fuse(n, ci, nc)
                     .tile(nc, x, nco, xo, nci, xi, 16, 16)
+                    .gpu_blocks(nco, xo)
+                    .gpu_threads(nci);*/
+
+                //seems to be the best so far
+                relu.fuse(n, ci, nc)
+                    .tile(nc, x, nco, xo, nci, xi, 32, 32)
                     .gpu_blocks(nco, y)
                     .gpu_threads(nci, xi);
+
+                /*relu.fuse(n, ci, nc)
+                    .tile(x, y, xo, yo, xi, yi, 8, 8)
+                    .gpu_blocks(nc, xo, yo)
+                    .gpu_threads(xi, yi);*/
             }
             else {
                 /*relu.tile(x, y, x_outer, y_outer, x_inner, y_inner, 32, 32)
@@ -94,8 +105,26 @@ public:
         return true;
     }
 
+    void print_result() {
+        // Print result for correctness check.
+        Buffer<float> output = this->get_output_buffer();
+
+        // Run pipeline once.
+        if (scheduler.empty()) {
+            relu.realize(output);
+            output.copy_to_host();
+        }
+        else {
+            auto_relu.realize(output);
+        }
+
+        // Print output to standard out.
+        print_4d_buffer(output);
+    }
+
     void test_performance(int num_runs = 100) {
         // Test the performance of the scheduled ReluLayerGPU.
+        printf("Testing performance on GPU:\n");
         Buffer<float> output = this->get_output_buffer();
 
         // Run the filter once to initialize any GPU runtime state.
@@ -110,19 +139,18 @@ public:
         double total_time = 0.0;
         double best_time = 0.0;
         for (int i = 0; i < num_runs; i++) {
-
-            double t1 = current_time();
+            double t1 = 0;
+            double t2 = 0;
+            
             if (scheduler.empty()) {
+                t1 = current_time();
                 relu.realize(output);
+                output.device_sync();
+                t2 = current_time();
             }
             else {
                 auto_relu.realize(output);
             }
-
-            // Force any GPU code to finish by copying the buffer back to the CPU.
-            output.device_sync();
-
-            double t2 = current_time();
 
             double elapsed = (t2 - t1);
             if (i == 0 || elapsed < best_time) {
@@ -142,13 +170,20 @@ int main(int argc, char** argv) {
     //   channels_in: number of input channels (depth of the input).
     //   height: height of the image.
     //   width: width of the image.
-    const int batch_size = 8, width = 256, height = 256, channels_in = 128;
     string scheduler = "";
+    bool check = false;
 
     if (argc == 2) {
-        printf("Running performance test for ReluLayerGPU with autoscheduler: %s.\n", argv[1]);
-        scheduler = argv[1];
-        load_plugin("autoschedule_li2018");
+        string arg = argv[1];
+        if (arg == "") {
+            printf("Running performance test for ReluLayerGPU with autoscheduler: %s.\n", argv[1]);
+            scheduler = arg;
+            load_plugin("autoschedule_li2018");
+        }
+        else if (arg == "--check" || arg == "-c") {
+            printf("Running correctness check.\n");
+            check = true;
+        }
     }
     else if (argc == 1) {
         printf("Running performance test for ReluLayerGPU with manual schedule.\n");
@@ -158,16 +193,24 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    const int batch_size = check ? 1 : 8, width = check ? 8: 256, height = check ? 8 : 256, channels_in = check ? 2 : 128;
+
     // Generate random input.
     // Input shape follows TensorFlow convention (N, H, W, C)
     printf("Generating input with dimensions: batch_size: %d, height: %d, width: %d, channels: %d\n", batch_size, height, width, channels_in);
 
     Buffer<float> input(batch_size, channels_in, height, width);
+
     for (int b = 0; b < batch_size; b++) {
         for (int h = 0; h < height; h++) {
             for (int w = 0; w < width; w++) {
                 for (int c = 0; c < channels_in; c++) {
-                    input(b, c, h, w) = rand();
+                    if (check) {
+                        input(b, c, h, w) = rand();
+                    }
+                    else {
+                        input(b, h, w, c) = 0.1f * (b + h + w + c);
+                    }
                 }
             }
         }
@@ -177,8 +220,12 @@ int main(int argc, char** argv) {
     ReluLayerGPU relu_layer(input, scheduler);
 
     relu_layer.schedule_for_gpu();
-    printf("Testing performance on GPU:\n");
-    relu_layer.test_performance();
+    if (check) {
+        relu_layer.print_result();
+    }
+    else {
+        relu_layer.test_performance();
+    }
 
     return 0;
 }
@@ -199,8 +246,6 @@ Target find_gpu_target() {
     else {
         features_to_try.push_back(Target::CUDA);
     }
-    // Uncomment the following lines to also try CUDA:
-    // features_to_try.push_back(Target::CUDA);
 
     for (Target::Feature f : features_to_try) {
         Target new_target = target.with_feature(f);
@@ -211,4 +256,35 @@ Target find_gpu_target() {
 
     printf("Requested GPU(s) are not supported. (Do you have the proper hardware and/or driver installed?)\n");
     return target;
+}
+
+void print_4d_buffer(Buffer<float> buf) {
+    // Print out the values in realized buffer.
+    // Input must be a 4-dimensional array of floats.
+    const int b_lo = buf.min(0);
+    const int b_hi = b_lo + buf.extent(0);
+    const int h_lo = buf.min(1);
+    const int h_hi = h_lo + buf.extent(1);
+    const int w_lo = buf.min(2);
+    const int w_hi = w_lo + buf.extent(2);
+    const int c_lo = buf.min(3);
+    const int c_hi = c_lo + buf.extent(3);
+
+    std::cout << "[";
+    for (int b = b_lo; b < b_hi; b++) {
+        std::cout << "[";
+        for (int h = h_lo; h < h_hi; h++) {
+            std::cout << "[";
+            for (int w = w_lo; w < w_hi; w++) {
+                std::cout << "[";
+                for (int c = c_lo; c < c_hi; c++) {
+                    printf("%.2f ", buf(b, h, w, c));
+                }
+                std::cout << "]\n";
+            }
+            std::cout << "]";
+        }
+        std::cout << "]";
+    }
+    std::cout << "]\n";
 }
