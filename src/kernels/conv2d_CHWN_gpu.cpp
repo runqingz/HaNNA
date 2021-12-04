@@ -45,22 +45,24 @@ public:
         : input(input), filters(filters), stride(stride), scheduler(scheduler){
        
         // Make sure we have a square kernel.
-        assert(filters.dim(0).extent() == filters.dim(1).extent());
+        assert(filters.dim(1).extent() == filters.dim(2).extent());
         // Make sure we have a valid kernel (size is odd).
-        assert(filters.dim(0).extent() % 2 == 1);
+        assert(filters.dim(1).extent() % 2 == 1);
         // Make sure the kernel has the same channels as input.
-        assert(filters.dim(2).extent() == input.dim(3).extent());
+        assert(filters.dim(3).extent() == input.dim(0).extent());
 
         // Pad input.
         pad = BoundaryConditions::constant_exterior(input, 0);
 
         // Apply filters.
-        const int kernel_size = filters.dim(0).extent();
+        const int kernel_size = filters.dim(1).extent();
         const int offset = kernel_size / 2;
-        const int in_channels = input.dim(3).extent();
-        r = RDom(0, kernel_size, 0, kernel_size, 0, in_channels);
+        const int in_channels = input.dim(0).extent();
+        RDom r(0, in_channels, 0, kernel_size, 0, kernel_size);
+
         
-        conv(n, x, y, co) += filters(r.x, r.y, r.z, co) * pad(n, stride * x + r.x - offset, stride * y + r.y - offset, r.z);
+        conv(co, x, y, n) += filters(co, r.y, r.z, r.x) * pad(r.x, stride * x + r.y - offset, stride * y + r.z - offset, n);
+        pad.trace_stores();
         
         // Pipline for autoscheduler. Will be skipped if autoscheduler is not used.
         if (! scheduler.empty()){
@@ -70,13 +72,13 @@ public:
         
     // Get a buffer with the shape of the output.
     Buffer<float> get_output_buffer() {
-        Buffer<float> output(input.dim(0).extent(), input.dim(1).extent(), input.dim(2).extent(), filters.dim(3).extent());
+        Buffer<float> output(filters.dim(0).extent(), input.dim(1).extent(), input.dim(2).extent(), input.dim(3).extent());
         return output;
     }
 
     // Now a schedule that uses CUDA or OpenCL.
     bool schedule_for_gpu() {
-        Var xo, yo, xi, yi, tile_index, to, ti, tio, coo, tii, coi;
+        Var xo, yo, xi, yi, tile_index, to, ti, tio, coo, tii, coi, rxo, rxi, rxii;
         
         Target target = find_gpu_target();
         if (!target.has_gpu_feature()) {
@@ -85,26 +87,20 @@ public:
         
         if (scheduler.empty()) {
             if (target.has_feature(Target::CUDA)) {
-                /*conv.fuse(n, x, x)
-                    .tile(x, y, xo, yo, xi, yi, 16, 16)
-                    .gpu_blocks(xo, yo)
-                    .gpu_threads(xi, yi);*/
-
                 /*conv
-                    .fuse(n, x, x)
-                    .fuse(y, co, y)
-                    .tile(x, y, xo, yo, xi, yi, 16, 16)
-                    .gpu_blocks(xo, yo)
-                    .gpu_threads(xi, yi);*/
+                    .split(r.x, rxo, rxi, 16)
+                    .split(rxi, rxi, rxii, 2)
+                    .reorder(co, rxii, x, y, r.y, r.z, rxi, rxo)
+                    .gpu_lanes(co)
+                    .unroll(x)
+                    .unroll(y)
+                    .unroll(r.y)
+                    .unroll(r.z)
+                    .unroll(rxii);*/
 
                 conv
-                    .fuse(n, x, x)
-                    .tile(x, y, xo, yo, xi, yi, 2, 2)
-                    .fuse(xo,yo,xo)
-                    .gpu_blocks(xo, co)
-                    .gpu_threads(xi, yi);
-
-                pad.compute_at(conv, co);
+                    .fuse(co, x, x)
+                    .gpu_tile(x, y, xo, yo, xi, yi, 16, 16);
             } else {
                 conv.tile(x, y, xo, yo, xi, yi, 32, 32)
                     .fuse(xo, yo, tile_index)
@@ -232,16 +228,16 @@ int main(int argc, char **argv) {
     // Input shape follows TensorFlow convention (N, H, W, C)
     printf("Generating input with dimensions: batch_size: %d, height: %d, width: %d, channels: %d\n", batch_size, height, width, channels_in);
 
-    Buffer<float> input(batch_size, height, width, channels_in);
-    for (int b = 0; b < batch_size; b++) {
+    Buffer<float> input(channels_in, height, width, batch_size);
+    for (int c = 0; c < channels_in; c++) {
         for (int h = 0; h < height; h++) {
             for (int w = 0; w < width; w++) {
-                for (int c = 0; c < channels_in; c++) {
+                for (int b = 0; b < batch_size; b++) {
                     if (check) {
-                        input(b, h, w, c) = 0.1f * (b + h + w + c);
+                        input(c, h, w, b) = 0.1f * (c + h + w + b);
                     }
                     else {
-                        input(b, h, w, c) = rand();
+                        input(c, h, w, b) = rand();
                     }
                 }
             }
@@ -251,16 +247,16 @@ int main(int argc, char **argv) {
     // Generate random filters.
     printf("Generating filters with dimensions: height: %d, width: %d, channels: %d, num_filters: %d\n", kernel_size, kernel_size, channels_in, channels_out);
 
-    Buffer<float> filters(kernel_size, kernel_size, channels_in, channels_out);
-    for (int x = 0; x < kernel_size; x++) {
-        for (int y = 0; y < kernel_size; y++) {
-            for (int ci = 0; ci < channels_in; ci++) {
-                for (int co = 0; co < channels_out; co++) {
+    Buffer<float> filters(channels_out, kernel_size, kernel_size, channels_in);
+    for (int co = 0; co < channels_out; co++) {
+        for (int x = 0; x < kernel_size; x++) {
+            for (int y = 0; y < kernel_size; y++) {
+                for (int ci = 0; ci < channels_in; ci++) {
                     if (check) {
-                        filters(x, y, ci, co) = 0.1f * (x + y + ci + co);
+                        filters(co, x, y, ci) = 0.1f * (x + y + ci + co);
                     }
                     else {
-                        filters(x, y, ci, co) = rand();
+                        filters(co, x, y, ci) = rand();
                     }
                 }
             }

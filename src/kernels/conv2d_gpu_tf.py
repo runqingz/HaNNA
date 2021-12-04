@@ -1,5 +1,6 @@
 # Script for Testing and Benchmarking Convolutional Layer on GPU
 # (See tf.nn.conv2d)
+# Important: for correctness checks, please make sure the input dimensions are the same.
 
 from functools import cache
 import tensorflow as tf
@@ -11,11 +12,11 @@ CHECK = False
 
 if __name__ == "__main__":
     batch_size = 8
-    width = 120
-    height = 100
-    channels_in = 3
-    channels_out = 5
-    kernel_size = 5
+    width = 7
+    height = 7
+    channels_in = 1024
+    channels_out = 1024
+    kernel_size = 3
     stride = 1
 
     num_runs = 100
