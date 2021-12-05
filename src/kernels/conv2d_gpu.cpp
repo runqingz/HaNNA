@@ -99,10 +99,10 @@ public:
 
                 conv
                     .fuse(n, x, x)
-                    .tile(x, y, xo, yo, xi, yi, 2, 2)
-                    .fuse(xo,yo,xo)
-                    .gpu_blocks(xo, co)
-                    .gpu_threads(xi, yi);
+                    .tile(x, y, xo, yo, xi, yi, 16, 16)
+                    .fuse(xo,yo,tile_index)
+                    .gpu_blocks(tile_index, co)
+                    .gpu_lanes(xi);
 
                 pad.compute_at(conv, co);
             } else {
@@ -205,7 +205,7 @@ int main(int argc, char **argv) {
     //   width: width of the image.
     //   kernel_size: width and height of the filters. (3 for 3 x 3 conv layer).
     //   stride: the stride for sliding window.
-    const int batch_size = 8, width = 56, height = 56, channels_in = 64, channels_out = 64, kernel_size = 3, stride = 1;
+    const int batch_size = 5, width = 80, height = 100, channels_in = 128, channels_out = 128, kernel_size = 3, stride = 1;
     string scheduler = "";
     bool check = false;
     
