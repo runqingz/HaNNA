@@ -29,7 +29,7 @@ void print_4d_buffer(Buffer<float> buf);
 class Conv2DLayerGPU {
 public:
     Var n, x, y, ci, co;
-    Func pad, conv;
+    Func conv, pad, relu, inputf, filtersf;
     Buffer<float> input, filters;
     const int stride;
     const string scheduler;
@@ -43,68 +43,148 @@ public:
     //  scheduler: String for the name of the autoscheduler to be used. Empty for manual schedule.
     Conv2DLayerGPU(Buffer<float> input, Buffer<float> filters, const int stride, const string scheduler)
         : input(input), filters(filters), stride(stride), scheduler(scheduler){
-       
         // Make sure we have a square kernel.
-        assert(filters.dim(0).extent() == filters.dim(1).extent());
+        assert(filters.dim(1).extent() == filters.dim(2).extent());
         // Make sure we have a valid kernel (size is odd).
-        assert(filters.dim(0).extent() % 2 == 1);
+        assert(filters.dim(1).extent() % 2 == 1);
         // Make sure the kernel has the same channels as input.
-        assert(filters.dim(2).extent() == input.dim(3).extent());
+        assert(filters.dim(3).extent() == input.dim(0).extent());
 
         // Pad input.
         pad = BoundaryConditions::constant_exterior(input, 0);
 
+        // Load filters into shared memory.
+        filtersf(co, x, y, ci) = filters(co, x, y, ci);
+
         // Apply filters.
-        const int kernel_size = filters.dim(0).extent();
+        const int kernel_size = filters.dim(1).extent();
         const int offset = kernel_size / 2;
-        const int in_channels = input.dim(3).extent();
-        r = RDom(0, kernel_size, 0, kernel_size, 0, in_channels);
+        const int in_channels = input.dim(0).extent();
         
-        conv(n, x, y, co) += filters(r.x, r.y, r.z, co) * pad(n, stride * x + r.x - offset, stride * y + r.y - offset, r.z);
+
+        RDom r(0, in_channels, 0, kernel_size, 0, kernel_size);
+
+        //conv(co, x, y, n) += filters(co, r.y, r.z, r.x) * pad(r.x, stride * x + r.y - offset, stride * y + r.z - offset, n);
+        //inputf(ci, x, y, n) = input(ci, x, y, n);
+        //conv(co, x, y, n) += filters(co, this->r.y, this->r.z, this->r.x) * inputf(this->r.x, x + this->r.y, y + this->r.z, n);
+        conv(co, x, y, n) += filters(co, r.y, r.z, r.x) * pad(r.x, x + r.y,  y + r.z, n);
+        relu(co, x, y, n) = max(0, conv(co, x, y, n));
+        //pad.trace_stores();
+
+        Var xo("xo"), yo("yo"), xi("xi"), yi("yi"), tile_index("tilei"), to("to"), ti("ti"), tio("tio"), coo("coo"), tii("tii"), coi("coi"), s("s"), t("t");
+        RVar rxo("rxo"), rxi("rxi"), rxii("rxii"), temp;
+
+
+        /*conv.update()
+            .split(r.x, rxo, rxi, 16)
+            .split(rxi, rxi, rxii, 2)
+            .reorder(co, rxii, r.y, r.z, rxi, rxo, x, y)
+            .fuse(x,y,tile_index)
+            .gpu_blocks(tile_index)
+            .gpu_threads(co)
+            .unroll(r.y)
+            .unroll(r.z);*/
+
         
+        relu.compute_root()
+            .split(x, xo, xi, 4)
+            .split(y, yo, yi, 4)
+            .split(co, coo, coi, 32)
+            .reorder(xi, yi, coi, xo, yo, coo, n)
+            .unroll(xi)
+            .unroll(yi)
+            .fuse(coo, n, tile_index)
+            .gpu_blocks(xo, yo, tile_index)
+            .gpu_threads(coi);
+
+        conv.compute_at(relu, xo)
+            .update()
+            .fuse(y, n, y)
+            .split(r.x, rxo, rxi, 32)
+            .split(rxi, rxi, rxii, 2)
+            .reorder(co, rxii, rxi, rxo, r.y, r.z, x, y)
+            .gpu_blocks(x, y)
+            .gpu_threads(co)
+            .unroll(r.y)
+            .unroll(r.z);
+
+        pad.compute_at(conv, rxo)
+            .fuse(_0, _1, s)
+            .fuse(_2, _3, t)
+            .gpu_threads(s);
+
+        Target target = find_gpu_target();
+        conv.compile_jit(target);
+
         // Pipline for autoscheduler. Will be skipped if autoscheduler is not used.
         if (! scheduler.empty()){
-            autoconv = Pipeline(conv);
+            autoconv = Pipeline(conv); 
         }
     }
         
     // Get a buffer with the shape of the output.
     Buffer<float> get_output_buffer() {
-        Buffer<float> output(input.dim(0).extent(), input.dim(1).extent(), input.dim(2).extent(), filters.dim(3).extent());
+        Buffer<float> output(filters.dim(0).extent(), input.dim(1).extent()-2, input.dim(2).extent()-2, input.dim(3).extent());
         return output;
     }
 
     // Now a schedule that uses CUDA or OpenCL.
     bool schedule_for_gpu() {
-        Var xo, yo, xi, yi, tile_index, to, ti, tio, coo, tii, coi;
+        /*RDom r(0, 64, 0, 3, 0, 3);
+
+        inputf(ci, x, y, n) = input(ci, x, y, n);
+        conv(co, x, y, n) += filters(co, r.y, r.z, r.x) * inputf(r.x, x + r.y, y + r.z, n);
+        relu(co, x, y, n) = max(0, conv(co, x, y, n));*/
+
+        //RDom r(0, 64, 0, 3, 0, 3);
+
+        Var xo("xo"), yo("yo"), xi("xi"), yi("yi"), tile_index("tilei"), to("to"), ti("ti"), tio("tio"), coo("coo"), tii("tii"), coi("coi"), t("t");
+        RVar rxo("rxo"), rxi("rxi"), rxii("rxii");
         
         Target target = find_gpu_target();
         if (!target.has_gpu_feature()) {
             return false;
         }
         
+        
         if (scheduler.empty()) {
             if (target.has_feature(Target::CUDA)) {
-                /*conv.fuse(n, x, x)
-                    .tile(x, y, xo, yo, xi, yi, 16, 16)
-                    .gpu_blocks(xo, yo)
-                    .gpu_threads(xi, yi);*/
 
-                /*conv
-                    .fuse(n, x, x)
-                    .fuse(y, co, y)
-                    .tile(x, y, xo, yo, xi, yi, 16, 16)
-                    .gpu_blocks(xo, yo)
-                    .gpu_threads(xi, yi);*/
+                relu.compute_root()
+                    .split(x, xo, xi, 5)
+                    .split(y, yo, yi, 5)
+                    .split(co, coo, coi, 32)
+                    .reorder(xi, yi, coi, xo, yo, coo, n)
+                    .gpu_lanes(coi)
+                    .unroll(xi)
+                    .unroll(yi)
+                    .fuse(coo, n, tile_index)
+                    .gpu_blocks(xo, yo, tile_index);
+
 
                 conv
-                    .fuse(n, x, x)
-                    .tile(x, y, xo, yo, xi, yi, 16, 16)
-                    .fuse(xo,yo,tile_index)
-                    .gpu_blocks(tile_index, co)
-                    .gpu_lanes(xi);
+                    /*.compute_at(relu, xo)
+                    .store_in(MemoryType::Register)
+                    .gpu_lanes(co)
+                    .unroll(x)
+                    .unroll(y)
+                    .update()*/
+                    //.split(r.x, rxo, rxi, 16)
+                    //.split(rxi, rxi, rxii, 2)
+                    .split(r.x, rxo, rxi, 16)
+                    .split(rxi, rxi, rxii, 2)
+                    .reorder(co, rxii, x, y, r.y, r.z, rxi, rxo)
+                    .gpu_lanes(co)
+                    .unroll(x)
+                    .unroll(y)
+                    .unroll(r.y)
+                    .unroll(r.z)
+                    .unroll(rxii);
+               
 
-                pad.compute_at(conv, co);
+                /*conv
+                    .fuse(co, x, x)
+                    .gpu_tile(x, y, xo, yo, xi, yi, 16, 16);*/
             } else {
                 conv.tile(x, y, xo, yo, xi, yi, 32, 32)
                     .fuse(xo, yo, tile_index)
@@ -197,6 +277,7 @@ public:
 };
 
 int main(int argc, char **argv) {
+    
     // Params:
     //   batch_size: number of images (in a single batch).
     //   channels_in: number of input channels (depth of the input).
@@ -205,7 +286,7 @@ int main(int argc, char **argv) {
     //   width: width of the image.
     //   kernel_size: width and height of the filters. (3 for 3 x 3 conv layer).
     //   stride: the stride for sliding window.
-    const int batch_size = 5, width = 80, height = 100, channels_in = 128, channels_out = 128, kernel_size = 3, stride = 1;
+    const int batch_size = 8, width = 56, height = 56, channels_in = 64, channels_out = 64, kernel_size = 3, stride = 1;
     string scheduler = "";
     bool check = false;
     
@@ -228,20 +309,21 @@ int main(int argc, char **argv) {
         return 1;
     }
     
+    try {
     // Generate random input.
     // Input shape follows TensorFlow convention (N, H, W, C)
     printf("Generating input with dimensions: batch_size: %d, height: %d, width: %d, channels: %d\n", batch_size, height, width, channels_in);
 
-    Buffer<float> input(batch_size, height, width, channels_in);
-    for (int b = 0; b < batch_size; b++) {
+    Buffer<float> input(channels_in, height, width, batch_size);
+    for (int c = 0; c < channels_in; c++) {
         for (int h = 0; h < height; h++) {
             for (int w = 0; w < width; w++) {
-                for (int c = 0; c < channels_in; c++) {
+                for (int b = 0; b < batch_size; b++) {
                     if (check) {
-                        input(b, h, w, c) = 0.1f * (b + h + w + c);
+                        input(c, h, w, b) = 0.1f * (c + h + w + b);
                     }
                     else {
-                        input(b, h, w, c) = rand();
+                        input(c, h, w, b) = rand();
                     }
                 }
             }
@@ -251,16 +333,16 @@ int main(int argc, char **argv) {
     // Generate random filters.
     printf("Generating filters with dimensions: height: %d, width: %d, channels: %d, num_filters: %d\n", kernel_size, kernel_size, channels_in, channels_out);
 
-    Buffer<float> filters(kernel_size, kernel_size, channels_in, channels_out);
-    for (int x = 0; x < kernel_size; x++) {
-        for (int y = 0; y < kernel_size; y++) {
-            for (int ci = 0; ci < channels_in; ci++) {
-                for (int co = 0; co < channels_out; co++) {
+    Buffer<float> filters(channels_out, kernel_size, kernel_size, channels_in);
+    for (int co = 0; co < channels_out; co++) {
+        for (int x = 0; x < kernel_size; x++) {
+            for (int y = 0; y < kernel_size; y++) {
+                for (int ci = 0; ci < channels_in; ci++) {
                     if (check) {
-                        filters(x, y, ci, co) = 0.1f * (x + y + ci + co);
+                        filters(co, x, y, ci) = 0.1f * (x + y + ci + co);
                     }
                     else {
-                        filters(x, y, ci, co) = rand();
+                        filters(co, x, y, ci) = rand();
                     }
                 }
             }
@@ -271,13 +353,26 @@ int main(int argc, char **argv) {
     Conv2DLayerGPU conv_layer(input, filters, stride, scheduler);
     printf("%s", scheduler.c_str());
 
-    conv_layer.schedule_for_gpu();
-    if (check) {
-        conv_layer.print_result();
+    
+        //conv_layer.schedule_for_gpu();
+        if (check) {
+            conv_layer.print_result();
+        }
+        else {
+            conv_layer.test_performance(50);
+        }
+    } catch (Halide::CompileError e) {
+        printf(e.what());
+        return false;
+    } catch (Halide::RuntimeError e) {
+        printf(e.what());
+        return false;
+    } catch (Halide::Error e) {
+        printf(e.what());
+        return false;
     }
-    else {
-        conv_layer.test_performance(10);
-    }
+
+    
     
     return 0;
 }
