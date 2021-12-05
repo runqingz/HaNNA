@@ -67,7 +67,7 @@ public:
         //conv(co, x, y, n) += filters(co, r.y, r.z, r.x) * pad(r.x, stride * x + r.y - offset, stride * y + r.z - offset, n);
         //inputf(ci, x, y, n) = input(ci, x, y, n);
         //conv(co, x, y, n) += filters(co, this->r.y, this->r.z, this->r.x) * inputf(this->r.x, x + this->r.y, y + this->r.z, n);
-        conv(co, x, y, n) += filtersf(co, r.y, r.z, r.x) * pad(r.x, x + r.y,  y + r.z, n);
+        conv(co, x, y, n) += filters(co, r.y, r.z, r.x) * pad(r.x, x + r.y,  y + r.z, n);
         relu(co, x, y, n) = max(0, conv(co, x, y, n));
         //pad.trace_stores();
 
