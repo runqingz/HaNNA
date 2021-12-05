@@ -68,22 +68,11 @@ public:
         //inputf(ci, x, y, n) = input(ci, x, y, n);
         //conv(co, x, y, n) += filters(co, this->r.y, this->r.z, this->r.x) * inputf(this->r.x, x + this->r.y, y + this->r.z, n);
         conv(co, x, y, n) += filtersf(co, r.y, r.z, r.x) * pad(r.x, x + r.y,  y + r.z, n);
-        //relu(co, x, y, n) = max(0, conv(co, x, y, n));
+        relu(co, x, y, n) = max(0, conv(co, x, y, n));
         //pad.trace_stores();
 
         Var xo("xo"), yo("yo"), xi("xi"), yi("yi"), tile_index("tilei"), to("to"), ti("ti"), tio("tio"), coo("coo"), tii("tii"), coi("coi"), s("s"), t("t");
-        RVar rxo("rxo"), rxi("rxi"), rxii("rxii");
-
-        /*relu.compute_root()
-            .split(x, xo, xi, 5)
-            .split(y, yo, yi, 5)
-            .split(co, coo, coi, 32)
-            .reorder(xi, yi, coi, xo, yo, coo, n)
-            .gpu_lanes(coi)
-            .unroll(xi)
-            .unroll(yi)
-            .fuse(coo, n, tile_index)
-            .gpu_blocks(xo, yo, tile_index);*/
+        RVar rxo("rxo"), rxi("rxi"), rxii("rxii"), temp;
 
 
         /*conv.update()
@@ -97,25 +86,33 @@ public:
             .unroll(r.z);*/
 
         
+        relu.compute_root()
+            .split(x, xo, xi, 4)
+            .split(y, yo, yi, 4)
+            .split(co, coo, coi, 32)
+            .reorder(xi, yi, coi, xo, yo, coo, n)
+            .unroll(xi)
+            .unroll(yi)
+            .fuse(coo, n, tile_index)
+            .gpu_blocks(xo, yo, tile_index)
+            .gpu_threads(coi);
 
-        conv.update()
+        conv.compute_at(relu, xo)
+            .update()
             .fuse(y, n, y)
-            .split(r.x, rxo, rxi, 16)
-            //.split(rxi, rxi, rxii, 2)
-            .reorder(co, rxi, rxo, r.y, r.z, x, y)
+            .split(r.x, rxo, rxi, 32)
+            .split(rxi, rxi, rxii, 2)
+            .reorder(co, rxii, rxi, rxo, r.y, r.z, x, y)
             .gpu_blocks(x, y)
             .gpu_threads(co)
             .unroll(r.y)
             .unroll(r.z);
 
-        pad
-            .compute_at(conv, rxo)
+        pad.compute_at(conv, rxo)
             .fuse(_0, _1, s)
             .fuse(_2, _3, t)
             .gpu_threads(s);
 
-        //filtersf
-        //    .compute_at(conv, rxi);
         Target target = find_gpu_target();
         conv.compile_jit(target);
 
