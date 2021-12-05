@@ -24,7 +24,7 @@ void print_4d_buffer(Buffer<float> buf);
 
 class DepthwiseSepConv2DLayerCHWNGPU {
 public:
-    Var n, x, y, ci, co;
+    Var n, x, y, ci, co, q;
     Func depthwise_conv, pad, relu, inputf, filtersf;
     Buffer<float> input, depthwise_filters;
     const int stride;
@@ -53,14 +53,15 @@ public:
         //filtersf(co, x, y, ci) = filters(co, x, y, ci);
 
         // Apply filters.
-        const int kernel_size = depthwise_filters.dim(1).extent();
+        const int kernel_size = depthwise_filters.dim(3).extent();
         const int offset = kernel_size / 2;
-        const int channel_multiplier = depthwise_filters.dim(3).extent();
+        const int channel_multiplier = depthwise_filters.dim(0).extent();
         r = RDom(0, kernel_size, 0, kernel_size);
 
         //BEFORE data layout change
         //depthwise_conv(n, x, y, co) += depthwise_filters(r.x, r.y, co / channel_multiplier, co % channel_multiplier) * pad(n, stride * x + r.x - offset, stride * y + r.y - offset, co / channel_multiplier);
-        depthwise_conv(co, x, y, n) += depthwise_filters(r.x, r.y, co / channel_multiplier, co % channel_multiplier) * pad(co / channel_multiplier, stride * x + r.x - offset, stride * y + r.y - offset, n);
+        //depthwise_conv(ci * channel_multiplier + q, x, y, n) += depthwise_filters(r.x, r.y, ci, q) * pad(ci, x + r.x , y + r.y, n);
+        depthwise_conv(co, x, y, n) += depthwise_filters(co % channel_multiplier, co / channel_multiplier, r.x, r.y) * pad(co / channel_multiplier, x + r.x , y + r.y, n);
         //relu(co, x, y, n) = max(0, depthwise_conv(co, x, y, n));
 
         Var xo("xo"), yo("yo"), xi("xi"), yi("yi"), tile_index("tilei"), to("to"), ti("ti"), tio("tio"), coo("coo"), tii("tii"), coi("coi"), s("s"), t("t");
@@ -93,8 +94,7 @@ public:
             .fuse(_2, _3, t)
             .gpu_threads(s);*/
 
-        depthwise_conv.compute_root()
-            .gpu_blocks(x, y);
+        depthwise_conv.compute_root();
 
         Target target = find_gpu_target();
         depthwise_conv.compile_jit(target);
@@ -108,7 +108,7 @@ public:
 
     // Get a buffer with the shape of the output.
     Buffer<float> get_output_buffer() {
-        Buffer<float> output(input.dim(0).extent(), input.dim(1).extent(), input.dim(2).extent(), depthwise_filters.dim(2).extent() * depthwise_filters.dim(3).extent());
+        Buffer<float> output(depthwise_filters.dim(0).extent() * depthwise_filters.dim(1).extent(), input.dim(1).extent(), input.dim(2).extent(), input.dim(3).extent());
         return output;
     }
 
@@ -184,7 +184,7 @@ int main(int argc, char** argv) {
     //   width: width of the image.
     //   kernel_size: width and height of the filters. (3 for 3 x 3 conv layer).
     //   stride: the stride for sliding window.
-    const int batch_size = 8, width = 120, height = 100, channels_in = 3, channel_multiplier = 2, kernel_size = 5, stride = 1;
+    
     string scheduler = "";
     bool check = false;
 
@@ -210,6 +210,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    const int batch_size = check ? 1 : 8, width = check ? 4: 120, height = check ? 4 : 100,  channels_in = check ? 2 : 3, channel_multiplier = check ? 2 : 2, kernel_size = check ? 3 : 5, stride = 1;
+
     try {
         // Generate random input. If we are in checking result mode, each entry = (sum of indices) * 0.1
         Buffer<float> input(channels_in, height, width, batch_size);
@@ -231,16 +233,16 @@ int main(int argc, char** argv) {
         // Generate random filters. If we are in checking result mode, each entry = (sum of indices) * 0.1
         printf("Generating filters with dimensions: height: %d, width: %d, channels: %d, channels multiplier: %d\n", kernel_size, kernel_size, channels_in, channel_multiplier);
 
-        Buffer<float> depthwise_filters(kernel_size, kernel_size, channels_in, channel_multiplier);
-        for (int x = 0; x < kernel_size; x++) {
-            for (int y = 0; y < kernel_size; y++) {
-                for (int ci = 0; ci < channels_in; ci++) {
-                    for (int cm = 0; cm < channel_multiplier; cm++) {
+        Buffer<float> depthwise_filters(channel_multiplier, channels_in, kernel_size, kernel_size);
+        for (int cm = 0; cm < channel_multiplier; cm++) {
+            for (int ci = 0; ci < channels_in; ci++) {
+                for (int x = 0; x < kernel_size; x++) {
+                    for (int y = 0; y < kernel_size; y++) {
                         if (check) {
-                            depthwise_filters(x, y, ci, cm) = 0.1f * (x + y + ci + cm);
+                            depthwise_filters(cm, ci, x, y) = 0.1f * (x + y + ci + cm);
                         }
                         else {
-                            depthwise_filters(x, y, ci, cm) = rand();
+                            depthwise_filters(cm, ci, x, y) = rand();
                         }
                     }
                 }
@@ -332,4 +334,6 @@ void print_4d_buffer(Buffer<float> buf) {
         std::cout << "]";
     }
     std::cout << "]\n";
+
+    printf("Shape: (%d, %d, %d, %d)\n", b_hi, h_hi, w_hi, c_hi);
 }
