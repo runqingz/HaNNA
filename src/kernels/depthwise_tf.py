@@ -30,7 +30,7 @@ if __name__ == "__main__":
 
     if CHECK:
         input_shape = (1,4,4,2)
-        filters_shape = (3,3,2,2)
+        filters_shape = (3,3,2,1)
         input_array = np.zeros(input_shape)
         filters_array = np.zeros(filters_shape)
 

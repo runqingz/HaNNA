@@ -25,8 +25,8 @@ void print_4d_buffer(Buffer<float> buf);
 class DepthwiseSepConv2DLayerCHWNGPU {
 public:
     Var n, x, y, ci, co, q;
-    Func depthwise_conv, pad, relu, inputf, filtersf;
-    Buffer<float> input, depthwise_filters;
+    Func depthwise_conv, pad, relu, inputf, filtersf, pointwise_conv;
+    Buffer<float> input, depthwise_filters, pointwise_filter;
     const int stride;
     const string scheduler;
     RDom r;
@@ -37,14 +37,14 @@ public:
     //  filters: 4-D tensor of shape [filter_height, filter_width, in_channels, out_channels].
     //  stride: Int for the stride of the sliding window.
     //  scheduler: String for the name of the autoscheduler to be used. Empty for manual schedule.
-    DepthwiseSepConv2DLayerCHWNGPU(Buffer<float> input, Buffer<float> filters, const int stride, const string scheduler)
-        : input(input), depthwise_filters(filters), stride(stride), scheduler(scheduler) {
+    DepthwiseSepConv2DLayerCHWNGPU(Buffer<float> input, Buffer<float> filters, Buffer<float> pointwise_filter, const int stride, const string scheduler)
+        : input(input), depthwise_filters(filters), pointwise_filter(pointwise_filter), stride(stride), scheduler(scheduler) {
         // Make sure we have a square kernel.
         assert(depthwise_filters.dim(1).extent() == filters.dim(2).extent());
         // Make sure we have a valid kernel (size is odd).
         assert(depthwise_filters.dim(1).extent() % 2 == 1);
         // Make sure the kernel has the same channels as input.
-        assert(depthwise_filters.dim(3).extent() == input.dim(0).extent());
+        assert(pointwise_filters.dim(1).extent() == input.dim(0).extent());
 
         // Pad input.
         pad = BoundaryConditions::constant_exterior(input, 0);
@@ -53,16 +53,20 @@ public:
         //filtersf(co, x, y, ci) = filters(co, x, y, ci);
 
         // Apply filters.
-        const int kernel_size = depthwise_filters.dim(3).extent();
+        const int kernel_size = depthwise_filters.dim(1).extent();
         const int offset = kernel_size / 2;
-        const int channel_multiplier = depthwise_filters.dim(0).extent();
         r = RDom(0, kernel_size, 0, kernel_size);
 
         //BEFORE data layout change
         //depthwise_conv(n, x, y, co) += depthwise_filters(r.x, r.y, co / channel_multiplier, co % channel_multiplier) * pad(n, stride * x + r.x - offset, stride * y + r.y - offset, co / channel_multiplier);
         //depthwise_conv(ci * channel_multiplier + q, x, y, n) += depthwise_filters(r.x, r.y, ci, q) * pad(ci, x + r.x , y + r.y, n);
-        depthwise_conv(co, x, y, n) += depthwise_filters(co % channel_multiplier, co / channel_multiplier, r.x, r.y) * pad(co / channel_multiplier, x + r.x , y + r.y, n);
-        //relu(co, x, y, n) = max(0, depthwise_conv(co, x, y, n));
+        depthwise_conv(ci, x, y, n) += depthwise_filters(ci, r.x, r.y) * pad(ci, stride * x + r.x - offset, stride * y + r.y - offset, n);
+
+        const int in_channels = input.dim(0).extent();
+        RDom rp(0, in_channels);
+        
+        //pointwise_conv(co, x, y, n)
+        pointwise_conv(co, x, y, n) += pointwise_filter(co, rp.x) * depthwise_conv(rp.x, x , y , n);
 
         Var xo("xo"), yo("yo"), xi("xi"), yi("yi"), tile_index("tilei"), to("to"), ti("ti"), tio("tio"), coo("coo"), tii("tii"), coi("coi"), s("s"), t("t");
         RVar rxo("rxo"), rxi("rxi"), rxii("rxii"), temp;
@@ -78,26 +82,46 @@ public:
             .gpu_blocks(xo, yo, tile_index)
             .gpu_threads(coi);*/
 
-        /*depthwise_conv.compute_at(relu, xo)
+        //pointwise_conv
+        //    .fuse(x, n, x)
+        //    .tile(x, y, xi, yi, 8, 8)
+        //    .reorder(xi, yi, co, x, y)
+        //    .gpu_blocks(x, y, co)
+        //    .gpu_threads(xi, yi);
+
+        pointwise_conv
+            .fuse(x, n, x)
+            .gpu_tile(x, y, xi, yi, 16, 16)
+            .update()
+            .fuse(co, n, co)
+            .split(rp.x, rxo, rxi, 32)
+            .split(rxi, rxi, rxii, 2)
+            .reorder(co, rxii, rxi, rxo, x, y)
+            .gpu_blocks(x, y)
+            .gpu_threads(co);
+        
+        /*depthwise_conv
+            .compute_at(pointwise_conv, rxi);*/
+
+        /*depthwise_conv
             .update()
             .fuse(y, n, y)
             .split(r.x, rxo, rxi, 32)
             .split(rxi, rxi, rxii, 2)
-            .reorder(co, rxii, rxi, rxo, r.y, r.z, x, y)
+            .reorder(ci, rxii, rxi, rxo, r.y, x, y)
             .gpu_blocks(x, y)
-            .gpu_threads(co)
-            .unroll(r.y)
-            .unroll(r.z);*/
+            .gpu_threads(ci)
+            .unroll(r.y);*/
 
-        /*pad.compute_at(depthwise_conv, rxo)
+
+        /*pad.compute_at(depthwise_conv, rxii)
             .fuse(_0, _1, s)
             .fuse(_2, _3, t)
-            .gpu_threads(s);*/
-
-        depthwise_conv.compute_root();
+            .gpu_threads(s,t);*/
 
         Target target = find_gpu_target();
-        depthwise_conv.compile_jit(target);
+        printf("Target: %s\n", target.to_string().c_str());
+        pointwise_conv.compile_jit(target);
 
         // Pipline for autoscheduler. Will be skipped if autoscheduler is not used.
         if (!scheduler.empty()) {
@@ -108,7 +132,7 @@ public:
 
     // Get a buffer with the shape of the output.
     Buffer<float> get_output_buffer() {
-        Buffer<float> output(depthwise_filters.dim(0).extent() * depthwise_filters.dim(1).extent(), input.dim(1).extent(), input.dim(2).extent(), input.dim(3).extent());
+        Buffer<float> output(pointwise_filter.dim(0).extent(), input.dim(1).extent(), input.dim(2).extent(), input.dim(3).extent());
         return output;
     }
 
@@ -118,7 +142,7 @@ public:
 
         // Run the filter once to initialize any GPU runtime state.
         if (scheduler.empty()) {
-            depthwise_conv.realize(output);
+            pointwise_conv.realize(output);
         }
         else {
             autoconv.realize(output);
@@ -134,7 +158,7 @@ public:
 
             if (scheduler.empty()) {
                 t1 = current_time();
-                depthwise_conv.realize(output);
+                pointwise_conv.realize(output);
                 output.device_sync();
                 t2 = current_time();
             }
@@ -162,7 +186,7 @@ public:
 
         // Run pipeline once.
         if (scheduler.empty()) {
-            depthwise_conv.realize(output);
+            pointwise_conv.realize(output);
         }
         else {
             autoconv.realize(output);
@@ -210,7 +234,14 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    const int batch_size = check ? 1 : 8, width = check ? 4: 120, height = check ? 4 : 100,  channels_in = check ? 2 : 3, channel_multiplier = check ? 2 : 2, kernel_size = check ? 3 : 5, stride = 1;
+    const int batch_size = check ? 1 : 8;
+    const int width = check ? 4 : 56;
+    const int height = check ? 4 : 56;
+    const int channels_in = check ? 2 : 64;
+    const int channels_out = check ? 2 : 64;
+    const int channel_multiplier = check ? 1 : 1;
+    const int kernel_size = check ? 3 : 3;
+    const int stride = 1;
 
     try {
         // Generate random input. If we are in checking result mode, each entry = (sum of indices) * 0.1
@@ -233,24 +264,35 @@ int main(int argc, char** argv) {
         // Generate random filters. If we are in checking result mode, each entry = (sum of indices) * 0.1
         printf("Generating filters with dimensions: height: %d, width: %d, channels: %d, channels multiplier: %d\n", kernel_size, kernel_size, channels_in, channel_multiplier);
 
-        Buffer<float> depthwise_filters(channel_multiplier, channels_in, kernel_size, kernel_size);
-        for (int cm = 0; cm < channel_multiplier; cm++) {
-            for (int ci = 0; ci < channels_in; ci++) {
-                for (int x = 0; x < kernel_size; x++) {
-                    for (int y = 0; y < kernel_size; y++) {
-                        if (check) {
-                            depthwise_filters(cm, ci, x, y) = 0.1f * (x + y + ci + cm);
-                        }
-                        else {
-                            depthwise_filters(cm, ci, x, y) = rand();
-                        }
+        Buffer<float> depthwise_filters(channels_in, kernel_size, kernel_size);
+        for (int ci = 0; ci < channels_in; ci++) {
+            for (int x = 0; x < kernel_size; x++) {
+                for (int y = 0; y < kernel_size; y++) {
+                    if (check) {
+                        depthwise_filters(ci, x, y) = 0.1f * (x + y + ci);
+                    }
+                    else {
+                        depthwise_filters(ci, x, y) = rand();
                     }
                 }
             }
         }
 
+        Buffer<float> pointwise_filters(channels_out, channels_in);
+        for (int co = 0; co < channels_out; co++) {
+            for (int ci = 0; ci < channels_in; ci++) {
+                if (check) {
+                    pointwise_filters(co, ci) = 0.1f * (ci + co);
+                }
+                else {
+                    pointwise_filters(co, ci) = rand();
+                }
+
+            }
+        }
+
         printf("Running pipeline on GPU:\n");
-        DepthwiseSepConv2DLayerCHWNGPU depth_conv_layer(input, depthwise_filters, stride, scheduler);
+        DepthwiseSepConv2DLayerCHWNGPU depth_conv_layer(input, depthwise_filters, pointwise_filters, stride, scheduler);
         printf("%s", scheduler.c_str());
 
 
