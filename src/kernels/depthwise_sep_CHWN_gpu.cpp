@@ -89,9 +89,28 @@ public:
         //    .gpu_blocks(x, y, co)
         //    .gpu_threads(xi, yi);
 
+        //pointwise_conv
+        //    .fuse(x, n, x)
+        //    .tile(x, y, xi, yi, 8, 8)
+        //    .reorder(xi, yi, x, y)
+        //    .gpu_blocks(x, y)
+        //    .gpu_threads(co)
+        //    .update()
+        //    .fuse(co, n, co)
+        //    .split(rp.x, rxo, rxi, 32)
+        //    .split(rxi, rxi, rxii, 2)
+        //    .reorder(co, rxii, rxi, rxo, x, y)
+        //    .gpu_blocks(x, y)
+        //    .gpu_threads(co);
+
         pointwise_conv
             .fuse(x, n, x)
-            .gpu_tile(x, y, xi, yi, 16, 16)
+            //.gpu_tile(x, y, xi, yi, 16, 16)
+            .split(co, coo, coi, 8)
+            .tile(x, y, xi, yi, 8, 8)
+            .reorder(xi, yi, coi, x, y, coo)
+            .gpu_blocks(x, y, coo)
+            .gpu_threads(coi)
             .update()
             .fuse(co, n, co)
             .split(rp.x, rxo, rxi, 32)
@@ -99,9 +118,11 @@ public:
             .reorder(co, rxii, rxi, rxo, x, y)
             .gpu_blocks(x, y)
             .gpu_threads(co);
-        
-        /*depthwise_conv
-            .compute_at(pointwise_conv, rxi);*/
+
+        depthwise_conv.in()
+            .compute_at(pointwise_conv, x)
+            .fuse(ci, n, ci)
+            .gpu_threads(ci);
 
         /*depthwise_conv
             .update()
@@ -121,7 +142,9 @@ public:
 
         Target target = find_gpu_target();
         printf("Target: %s\n", target.to_string().c_str());
+        //pointwise_conv.compile_to_c("depthwise_CHWN.c", {}, "ddd", target);
         pointwise_conv.compile_jit(target);
+        
 
         // Pipline for autoscheduler. Will be skipped if autoscheduler is not used.
         if (!scheduler.empty()) {
