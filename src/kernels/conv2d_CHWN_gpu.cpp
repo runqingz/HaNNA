@@ -60,13 +60,85 @@ public:
         const int in_channels = input.dim(0).extent();
         RDom r(0, in_channels, 0, kernel_size, 0, kernel_size);
 
-        
         conv(co, x, y, n) += filters(co, r.y, r.z, r.x) * pad(r.x, stride * x + r.y - offset, stride * y + r.z - offset, n);
-        pad.trace_stores();
         
         // Pipline for autoscheduler. Will be skipped if autoscheduler is not used.
         if (! scheduler.empty()){
             autoconv = Pipeline(conv);
+        }
+
+        Var xo, yo, xi, yi, tile_index, to, ti, tio, coo, tii, coi, s, t;
+        RVar rxi, rxo, rxii;
+
+        Target target = find_gpu_target();
+
+        if (scheduler.empty()) {
+            if (target.has_feature(Target::CUDA)) {
+                /*conv
+                    .fuse(co, x, x)
+                    .tile(x, y, xo, yo, xi, yi, 16, 16)
+                    .gpu_blocks(xo, yo)
+                    .gpu_lanes(xi);*/
+
+                //conv
+                //    .update()
+                //    .split(r.x, rxo, rxi, 16);
+
+                /*conv
+                    .update()
+                    .split(r.x, rxo, rxi, 16)
+                    .split(rxi, rxi, rxii, 2)
+                    .reorder(co, rxii, x, y, r.y, r.z, rxi, rxo)
+                    .gpu_blocks(y, x)
+                    .gpu_threads(co);*/
+
+                conv
+                    .fuse(x, n, x)
+                    .tile({ x, y, co }, { xi, yi, coi }, { 8, 8 , 16 })
+                    .gpu_blocks(x, y, co)
+                    .gpu_threads(coi)
+                    .update()
+                    .fuse(y, n, y)
+                    .split(r.x, rxo, rxi, 32)
+                    .split(rxi, rxi, rxii, 2)
+                    .reorder(co, rxii, rxi, rxo, x, y, r.y, r.z)
+                    .gpu_blocks(x, y)
+                    .gpu_threads(co)
+                    .unroll(r.y)
+                    .unroll(r.z);
+
+                pad
+                    .compute_at(conv, x)
+                    .fuse(_0, _1, s)
+                    .fuse(_2, _3, t)
+                    .gpu_threads(s);
+            }
+            else {
+                conv.tile(x, y, xo, yo, xi, yi, 32, 32)
+                    .fuse(xo, yo, tile_index)
+                    .gpu_blocks(tile_index)
+                    .gpu_threads(xi);
+            }
+
+
+            printf("Target: %s\n", target.to_string().c_str());
+            conv.compile_jit(target);
+        }
+        else {
+            pad.set_estimates({
+                {0, input.dim(0).extent()},
+                {0, input.dim(1).extent()},
+                {0, input.dim(2).extent()},
+                {0, input.dim(3).extent()} });
+
+            conv.set_estimates({
+                {0, input.dim(0).extent()},
+                {0, input.dim(1).extent()},
+                {0, input.dim(2).extent()},
+                {0, filters.dim(3).extent()} });
+
+            autoconv.auto_schedule(scheduler, target);
+            autoconv.compile_jit(target);
         }
     }
         
@@ -78,7 +150,8 @@ public:
 
     // Now a schedule that uses CUDA or OpenCL.
     bool schedule_for_gpu() {
-        Var xo, yo, xi, yi, tile_index, to, ti, tio, coo, tii, coi, rxo, rxi, rxii;
+        Var xo, yo, xi, yi, tile_index, to, ti, tio, coo, tii, coi;
+        RVar rxi, rxo, rxii;
         
         Target target = find_gpu_target();
         if (!target.has_gpu_feature()) {
@@ -88,19 +161,14 @@ public:
         if (scheduler.empty()) {
             if (target.has_feature(Target::CUDA)) {
                 /*conv
-                    .split(r.x, rxo, rxi, 16)
-                    .split(rxi, rxi, rxii, 2)
-                    .reorder(co, rxii, x, y, r.y, r.z, rxi, rxo)
-                    .gpu_lanes(co)
-                    .unroll(x)
-                    .unroll(y)
-                    .unroll(r.y)
-                    .unroll(r.z)
-                    .unroll(rxii);*/
+                    .fuse(co, x, x)
+                    .tile(x, y, xo, yo, xi, yi, 16, 16)
+                    .gpu_blocks(xo, yo)
+                    .gpu_lanes(xi);*/
 
                 conv
-                    .fuse(co, x, x)
-                    .gpu_tile(x, y, xo, yo, xi, yi, 16, 16);
+                    .update()
+                    .split(r.x, rxo, rxi, 16);
             } else {
                 conv.tile(x, y, xo, yo, xi, yi, 32, 32)
                     .fuse(xo, yo, tile_index)
@@ -263,16 +331,30 @@ int main(int argc, char **argv) {
         }
     }
 
-    printf("Running pipeline on GPU:\n");
-    Conv2DLayerGPU conv_layer(input, filters, stride, scheduler);
-    printf("%s", scheduler.c_str());
+    try {
+        printf("Running pipeline on GPU:\n");
+        Conv2DLayerGPU conv_layer(input, filters, stride, scheduler);
+        printf("%s", scheduler.c_str());
 
-    conv_layer.schedule_for_gpu();
-    if (check) {
-        conv_layer.print_result();
+        /*conv_layer.schedule_for_gpu();*/
+        if (check) {
+            conv_layer.print_result();
+        }
+        else {
+            conv_layer.test_performance(10);
+        }
     }
-    else {
-        conv_layer.test_performance(10);
+    catch (Halide::CompileError e) {
+        printf(e.what());
+        return 1;
+    }
+    catch (Halide::RuntimeError e) {
+        printf(e.what());
+        return 1;
+    }
+    catch (Halide::Error e) {
+        printf(e.what());
+        return 1;
     }
     
     return 0;
