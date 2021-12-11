@@ -66,6 +66,81 @@ public:
         if (! scheduler.empty()){
             autoconv = Pipeline(conv);
         }
+
+        Var xo, yo, xi, yi, tile_index, to, ti, tio, coo, tii, coi, s, t;
+        RVar rxi, rxo, rxii;
+
+        Target target = find_gpu_target();
+
+        if (scheduler.empty()) {
+            if (target.has_feature(Target::CUDA)) {
+                /*conv.fuse(n, x, x)
+                    .tile(x, y, xo, yo, xi, yi, 16, 16)
+                    .gpu_blocks(xo, yo)
+                    .gpu_threads(xi, yi);*/
+
+                    /*conv
+                        .fuse(n, x, x)
+                        .fuse(y, co, y)
+                        .tile(x, y, xo, yo, xi, yi, 16, 16)
+                        .gpu_blocks(xo, yo)
+                        .gpu_threads(xi, yi);*/
+
+                conv.update()
+                    .fuse(n, co, co)
+                    .split(r.x, rxo, rxi, 32)
+                    .split(rxi, rxi, rxii, 2)
+                    .reorder(co, rxii, rxi, rxo, r.y, r.z, x, y)
+                    .gpu_blocks(x, y)
+                    .gpu_threads(co);
+
+                /*pad
+                   .compute_at(conv, rxo)
+                   .fuse(_0, _1, s)
+                   .fuse(_2, _3, t)
+                   .gpu_threads(s);*/
+
+                /*conv
+                    .split(x, xo, xi, 5)
+                    .split(y, yo, yi, 5)
+                    .split(co, coo, coi, 32)
+                    .reorder(coi, xi, yi, coo, xo, yo, n)
+                    .gpu_blocks(xo, yo, coo)
+                    .gpu_threads(xi, yi);*/
+                    
+                
+                /*conv.update()
+                    .reorder(co, y, x, n);*/
+
+               
+            }
+            else {
+                conv.tile(x, y, xo, yo, xi, yi, 32, 32)
+                    .fuse(xo, yo, tile_index)
+                    .gpu_blocks(tile_index)
+                    .gpu_threads(xi);
+            }
+
+
+            printf("Target: %s\n", target.to_string().c_str());
+            conv.compile_jit(target);
+        }
+        else {
+            pad.set_estimates({
+                {0, input.dim(0).extent()},
+                {0, input.dim(1).extent()},
+                {0, input.dim(2).extent()},
+                {0, input.dim(3).extent()} });
+
+            conv.set_estimates({
+                {0, input.dim(0).extent()},
+                {0, input.dim(1).extent()},
+                {0, input.dim(2).extent()},
+                {0, filters.dim(3).extent()} });
+
+            autoconv.auto_schedule(scheduler, target);
+            autoconv.compile_jit(target);
+        }
     }
         
     // Get a buffer with the shape of the output.
@@ -103,7 +178,6 @@ public:
                     .fuse(xo,yo,xo)
                     .gpu_blocks(xo, co)
                     .gpu_threads(xi, yi);
-
                 pad.compute_at(conv, co);
             } else {
                 conv.tile(x, y, xo, yo, xi, yi, 32, 32)
@@ -267,16 +341,30 @@ int main(int argc, char **argv) {
         }
     }
 
-    printf("Running pipeline on GPU:\n");
-    Conv2DLayerGPU conv_layer(input, filters, stride, scheduler);
-    printf("%s", scheduler.c_str());
+    try {
+        printf("Running pipeline on GPU:\n");
+        Conv2DLayerGPU conv_layer(input, filters, stride, scheduler);
+        printf("%s", scheduler.c_str());
 
-    conv_layer.schedule_for_gpu();
-    if (check) {
-        conv_layer.print_result();
+        /*conv_layer.schedule_for_gpu();*/
+        if (check) {
+            conv_layer.print_result();
+        }
+        else {
+            conv_layer.test_performance(10);
+        }
     }
-    else {
-        conv_layer.test_performance(10);
+    catch (Halide::CompileError e) {
+        printf(e.what());
+        return 1;
+    }
+    catch (Halide::RuntimeError e) {
+        printf(e.what());
+        return 1;
+    }
+    catch (Halide::Error e) {
+        printf(e.what());
+        return 1;
     }
     
     return 0;
