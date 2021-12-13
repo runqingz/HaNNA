@@ -105,32 +105,28 @@ public:
 
         pointwise_conv
             .fuse(x, n, x)
-            .tile({ x, y, co }, { xi, yi, coi }, { 8, 8 , 16 })
+            .tile({ x, y, co }, { xi, yi, coi }, { 4, 4, 16 })
             .gpu_blocks(x, y, co)
-            .gpu_threads(coi)
+            .gpu_threads(xi, yi, coi)
             .store_in(MemoryType::GPUShared)
             .update()
             .fuse(co, n, co)
             .split(rp.x, rxo, rxi, 32)
-            .split(rxi, rxi, rxii, 2)
+            .split(rxi, rxi, rxii, 8)
             .reorder(co, rxii, rxi, rxo, x, y)
             .gpu_blocks(x, y)
             .gpu_threads(co);
 
         depthwise_conv
-            .in(pointwise_conv)
+            .in()
             .compute_at(pointwise_conv, x)
             .store_in(MemoryType::GPUShared)
             .fuse(ci, n, ci)
             .gpu_threads(ci);
 
         depthwise_conv
-            .compute_at(depthwise_conv.in(pointwise_conv), ci)
-            .unroll(x)
-            .unroll(y)
-            .update()
-            .unroll(x)
-            .unroll(y);
+            .compute_at(depthwise_conv.in(), ci)
+            .update();
 
         /*depthwise_conv
             .update()
