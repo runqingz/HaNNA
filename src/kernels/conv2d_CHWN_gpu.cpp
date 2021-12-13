@@ -73,25 +73,7 @@ public:
         Target target = find_gpu_target();
 
         if (scheduler.empty()) {
-            if (target.has_feature(Target::CUDA)) {
-                /*conv
-                    .fuse(co, x, x)
-                    .tile(x, y, xo, yo, xi, yi, 16, 16)
-                    .gpu_blocks(xo, yo)
-                    .gpu_lanes(xi);*/
-
-                //conv
-                //    .update()
-                //    .split(r.x, rxo, rxi, 16);
-
-                /*conv
-                    .update()
-                    .split(r.x, rxo, rxi, 16)
-                    .split(rxi, rxi, rxii, 2)
-                    .reorder(co, rxii, x, y, r.y, r.z, rxi, rxo)
-                    .gpu_blocks(y, x)
-                    .gpu_threads(co);*/
-
+            if (target.has_gpu_feature()) {
                 conv
                     .fuse(x, n, x)
                     .tile({ x, y, co }, { xi, yi, coi }, { 8, 8 , 16 })
@@ -113,18 +95,15 @@ public:
                     .fuse(_2, _3, t)
                     .gpu_threads(s);
             }
-            else {
-                conv.tile(x, y, xo, yo, xi, yi, 32, 32)
-                    .fuse(xo, yo, tile_index)
-                    .gpu_blocks(tile_index)
-                    .gpu_threads(xi);
-            }
 
 
             printf("Target: %s\n", target.to_string().c_str());
             conv.compile_jit(target);
         }
         else {
+            //Current Halide auto schedule will seg fault on deep learning kernels
+            throw "Unimplemented";
+
             pad.set_estimates({
                 {0, input.dim(0).extent()},
                 {0, input.dim(1).extent()},
@@ -146,57 +125,6 @@ public:
     Buffer<float> get_output_buffer() {
         Buffer<float> output(filters.dim(0).extent(), input.dim(1).extent(), input.dim(2).extent(), input.dim(3).extent());
         return output;
-    }
-
-    // Now a schedule that uses CUDA or OpenCL.
-    bool schedule_for_gpu() {
-        Var xo, yo, xi, yi, tile_index, to, ti, tio, coo, tii, coi;
-        RVar rxi, rxo, rxii;
-        
-        Target target = find_gpu_target();
-        if (!target.has_gpu_feature()) {
-            return false;
-        }
-        
-        if (scheduler.empty()) {
-            if (target.has_feature(Target::CUDA)) {
-                /*conv
-                    .fuse(co, x, x)
-                    .tile(x, y, xo, yo, xi, yi, 16, 16)
-                    .gpu_blocks(xo, yo)
-                    .gpu_lanes(xi);*/
-
-                conv
-                    .update()
-                    .split(r.x, rxo, rxi, 16);
-            } else {
-                conv.tile(x, y, xo, yo, xi, yi, 32, 32)
-                    .fuse(xo, yo, tile_index)
-                    .gpu_blocks(tile_index)
-                    .gpu_threads(xi);
-            }
-            
-
-            printf("Target: %s\n", target.to_string().c_str());
-            conv.compile_jit(target);
-        } else {
-            pad.set_estimates({
-                {0, input.dim(0).extent()},
-                {0, input.dim(1).extent()},
-                {0, input.dim(2).extent()},
-                {0, input.dim(3).extent()}});
-
-            conv.set_estimates({
-                {0, input.dim(0).extent()},
-                {0, input.dim(1).extent()},
-                {0, input.dim(2).extent()},
-                {0, filters.dim(3).extent()}});
-            
-            autoconv.auto_schedule(scheduler, target);
-            autoconv.compile_jit(target);
-        }
-
-        return true;
     }
 
     void test_performance(int num_runs=100) {
@@ -346,15 +274,15 @@ int main(int argc, char **argv) {
     }
     catch (Halide::CompileError e) {
         printf(e.what());
-        return 1;
+        return -1;
     }
     catch (Halide::RuntimeError e) {
         printf(e.what());
-        return 1;
+        return -1;
     }
     catch (Halide::Error e) {
         printf(e.what());
-        return 1;
+        return -1;
     }
     
     return 0;
@@ -369,11 +297,13 @@ Target find_gpu_target() {
     vector<Target::Feature> features_to_try;
     
     if (target.os == Target::OSX) {
-        // OS X doesn't update its OpenCL drivers, so they tend to be broken.
-        // CUDA would also be a fine choice on machines with NVidia GPUs.
+        //For OSX, we will use Metal APIs
         features_to_try.push_back(Target::Metal);
-    } else {
+    } else if (target.os == Target::Windows || target.os == Target::Linux) {
+        //For Linux and Windows, use CUDA
         features_to_try.push_back(Target::CUDA);
+    } else {
+        throw "Unimplemented";
     }
 
     for (Target::Feature f : features_to_try) {
