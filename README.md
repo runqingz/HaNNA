@@ -46,6 +46,6 @@ Our up-to-date scheduled kernels are:
 * depthwise_sep_CHWN_gpu
 
 ### Make sure GPU is used
-The printed target should be in this format ``` word_lengh-OS-xxx-GPU_feature (e.g. cuda) ```
+The printed target should be in this format ``` word_lengh-OS-xxx-GPU_feature-xxx (e.g. cuda) ```
 
 For example, on windows it might be ``` x86-64-windows-avx-avx2-cuda-f16c-fma-sse41 ```
