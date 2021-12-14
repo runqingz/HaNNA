@@ -41,7 +41,7 @@ To build run:
 ``` cmake --build .\build\ ```
 
 ### Executable
-Our current schedule kernels are:
+Our up-to-date scheduled kernels are:
 * conv2d_CHWN_gpu
 * depthwise_sep_CHWN_gpu
 
