@@ -74,7 +74,7 @@ public:
             .store_in(MemoryType::GPUShared)
             .update()
             .fuse(co, n, co)
-            .split(rp.x, rxo, rxi, 32)
+            .split(rp.x, rxo, rxi, 16)
             .split(rxi, rxi, rxii, 8)
             .reorder(co, rxii, rxi, rxo, x, y)
             .gpu_blocks(x, y)
@@ -189,7 +189,7 @@ int main(int argc, char** argv) {
         string arg = argv[1];
         if (arg == "Li2018") {
             //Load Auto Scheduler plugins
-            printf("Running performance test for Conv2DLayerGPU with autoscheduler: %s.\n", arg);
+            printf("Running performance test for Conv2DLayerGPU with autoscheduler: %s.\n", arg.c_str());
             scheduler = arg;
             load_plugin("autoschedule_li2018");
         }

@@ -204,7 +204,7 @@ int main(int argc, char **argv) {
     if (argc == 2) {
         string arg = argv[1];
         if (arg == "Li2018") {
-            printf("Running performance test for Conv2DLayerGPU with autoscheduler: %s.\n", arg);
+            printf("Running performance test for Conv2DLayerGPU with autoscheduler: %s.\n", arg.c_str());
             scheduler = arg;
             load_plugin("autoschedule_li2018");
         }
