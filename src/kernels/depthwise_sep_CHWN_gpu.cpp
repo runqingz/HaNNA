@@ -57,51 +57,14 @@ public:
         const int offset = kernel_size / 2;
         r = RDom(0, kernel_size, 0, kernel_size);
 
-        //BEFORE data layout change
-        //depthwise_conv(n, x, y, co) += depthwise_filters(r.x, r.y, co / channel_multiplier, co % channel_multiplier) * pad(n, stride * x + r.x - offset, stride * y + r.y - offset, co / channel_multiplier);
-        //depthwise_conv(ci * channel_multiplier + q, x, y, n) += depthwise_filters(r.x, r.y, ci, q) * pad(ci, x + r.x , y + r.y, n);
         depthwise_conv(ci, x, y, n) += depthwise_filters(ci, r.x, r.y) * pad(ci, stride * x + r.x - offset, stride * y + r.y - offset, n);
 
         const int in_channels = input.dim(0).extent();
         RDom rp(0, in_channels);
-        
-        //pointwise_conv(co, x, y, n)
         pointwise_conv(co, x, y, n) += pointwise_filter(co, rp.x) * depthwise_conv(rp.x, x , y , n);
 
         Var xo, yo, xi, yi, xii, yii, tile_index, to, ti, tio, tii, coo, coi, coii, s, t;
         RVar rxo, rxi, rxii, temp;
-
-        /*relu.compute_root()
-            .split(x, xo, xi, 4)
-            .split(y, yo, yi, 4)
-            .split(co, coo, coi, 32)
-            .reorder(xi, yi, coi, xo, yo, coo, n)
-            .unroll(xi)
-            .unroll(yi)
-            .fuse(coo, n, tile_index)
-            .gpu_blocks(xo, yo, tile_index)
-            .gpu_threads(coi);*/
-
-        //pointwise_conv
-        //    .fuse(x, n, x)
-        //    .tile(x, y, xi, yi, 8, 8)
-        //    .reorder(xi, yi, co, x, y)
-        //    .gpu_blocks(x, y, co)
-        //    .gpu_threads(xi, yi);
-
-        //pointwise_conv
-        //    .fuse(x, n, x)
-        //    .tile(x, y, xi, yi, 8, 8)
-        //    .reorder(xi, yi, x, y)
-        //    .gpu_blocks(x, y)
-        //    .gpu_threads(co)
-        //    .update()
-        //    .fuse(co, n, co)
-        //    .split(rp.x, rxo, rxi, 32)
-        //    .split(rxi, rxi, rxii, 2)
-        //    .reorder(co, rxii, rxi, rxo, x, y)
-        //    .gpu_blocks(x, y)
-        //    .gpu_threads(co);
 
         pointwise_conv
             .fuse(x, n, x)
@@ -111,7 +74,7 @@ public:
             .store_in(MemoryType::GPUShared)
             .update()
             .fuse(co, n, co)
-            .split(rp.x, rxo, rxi, 32)
+            .split(rp.x, rxo, rxi, 16)
             .split(rxi, rxi, rxii, 8)
             .reorder(co, rxii, rxi, rxo, x, y)
             .gpu_blocks(x, y)
@@ -128,32 +91,15 @@ public:
             .compute_at(depthwise_conv.in(), ci)
             .update();
 
-        /*depthwise_conv
-            .update()
-            .fuse(y, n, y)
-            .split(r.x, rxo, rxi, 32)
-            .split(rxi, rxi, rxii, 2)
-            .reorder(ci, rxii, rxi, rxo, r.y, x, y)
-            .gpu_blocks(x, y)
-            .gpu_threads(ci)
-            .unroll(r.y);*/
-
-
-        /*pad.compute_at(depthwise_conv, rxii)
-            .fuse(_0, _1, s)
-            .fuse(_2, _3, t)
-            .gpu_threads(s,t);*/
-
         Target target = find_gpu_target();
         printf("Target: %s\n", target.to_string().c_str());
-        //pointwise_conv.compile_to_c("depthwise_CHWN.c", {}, "ddd", target);
         pointwise_conv.compile_jit(target);
-        
 
         // Pipline for autoscheduler. Will be skipped if autoscheduler is not used.
         if (!scheduler.empty()) {
+            //Current Halide auto schedule will seg fault on deep learning kernels
             throw "Unimplemented";
-            //autoconv = Pipeline(conv);
+            autoconv = Pipeline(pointwise_conv);
         }
     }
 
@@ -243,7 +189,7 @@ int main(int argc, char** argv) {
         string arg = argv[1];
         if (arg == "Li2018") {
             //Load Auto Scheduler plugins
-            printf("Running performance test for Conv2DLayerGPU with autoscheduler: %s.\n", arg);
+            printf("Running performance test for Conv2DLayerGPU with autoscheduler: %s.\n", arg.c_str());
             scheduler = arg;
             load_plugin("autoschedule_li2018");
         }
@@ -323,7 +269,6 @@ int main(int argc, char** argv) {
         printf("%s", scheduler.c_str());
 
 
-        //conv_layer.schedule_for_gpu();
         if (check) {
             depth_conv_layer.print_result();
         }
@@ -357,10 +302,11 @@ Target find_gpu_target() {
     if (target.os == Target::OSX) {
         //For OSX, we will use Metal APIs
         features_to_try.push_back(Target::Metal);
-    }
-    else {
+    } else if (target.os == Target::Windows || target.os == Target::Linux) {
         //For Linux and Windows, use CUDA
         features_to_try.push_back(Target::CUDA);
+    } else {
+        throw "Unimplemented";
     }
 
     for (Target::Feature f : features_to_try) {
