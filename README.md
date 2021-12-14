@@ -44,3 +44,8 @@ To build run:
 Our current schedule kernels are:
 * conv2d_CHWN_gpu
 * depthwise_sep_CHWN_gpu
+
+### Make sure GPU is used
+The printed target should be in this format ``` word_lengh-OS-xxx-GPU_feature (e.g. cuda) ```
+
+For example, on windows it might be ``` x86-64-windows-avx-avx2-cuda-f16c-fma-sse41 ```
